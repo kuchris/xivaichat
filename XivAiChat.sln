@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XivAiChat", "XivAiChat\XivAiChat.csproj", "{A7BF1425-CEB8-45C0-96E7-793BFC20D266}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A7BF1425-CEB8-45C0-96E7-793BFC20D266}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A7BF1425-CEB8-45C0-96E7-793BFC20D266}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A7BF1425-CEB8-45C0-96E7-793BFC20D266}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A7BF1425-CEB8-45C0-96E7-793BFC20D266}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {54591D3C-6CBA-4FEB-AC46-D7EB0A04261A}
+	EndGlobalSection
+EndGlobal

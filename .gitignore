@@ -1,0 +1,23 @@
+# Build output
+bin/
+obj/
+
+# Visual Studio / Rider
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.idea/
+
+# Local tooling
+.dotnet-home/
+.appdata/
+.nuget/
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log

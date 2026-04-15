@@ -1,0 +1,14 @@
+{
+  "Author": "kuchris",
+  "Name": "XIV AI Chat",
+  "Punchline": "Draft or send AI replies in the chat channels you choose.",
+  "Description": "Personal dev plugin that watches the selected FFXIV chat channels, sends per-channel context to LM Studio or API models like Gemini, supports saved system prompt presets, and can print or send replies back into the same channel in game. Slash command: /xivaichat",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "cwls",
+    "chat",
+    "lmstudio",
+    "ai",
+    "dev"
+  ]
+}
