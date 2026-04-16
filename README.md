@@ -119,7 +119,3 @@ The plugin is mainly meant to be configured from the in-game window, but these c
 - With auto-send off, the reply is only printed locally as a draft.
 - With auto-send on, the plugin tries to send the reply back into the same watched channel.
 - The plugin prefers short, in-game-safe output and strips obviously bad formatting when needed.
-
-## Important Note
-
-This is a personal dev plugin. Auto-generating and auto-sending chat is not something I would expect to be accepted into the public Dalamud plugin repo, so treat this as local/private tooling.
