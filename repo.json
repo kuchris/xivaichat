@@ -1,0 +1,34 @@
+[
+  {
+    "Author": "kuchris",
+    "Name": "XIV AI Chat",
+    "Description": "Personal dev plugin that watches the selected FFXIV chat channels, sends per-channel context to LM Studio or API models like Gemini, supports saved system prompt presets, and can print or send replies back into the same channel in game. Slash command: /xivaichat",
+    "Punchline": "Draft or send AI replies in the chat channels you choose.",
+    "InternalName": "XivAiChat",
+    "AssemblyVersion": "0.1.1.0",
+    "TestingAssemblyVersion": "0.1.1.0",
+    "RepoUrl": "https://github.com/kuchris/xivaichat",
+    "ApplicableVersion": "any",
+    "DalamudApiLevel": 14,
+    "TestingDalamudApiLevel": 14,
+    "IsHide": "False",
+    "IsTestingExclusive": "False",
+    "DownloadCount": 0,
+    "LastUpdate": 1776335529,
+    "LoadPriority": 0,
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/kuchris/xivaichat/main/dist/XivAiChat.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/kuchris/xivaichat/main/dist/XivAiChat.zip",
+    "DownloadLinkTesting": "https://raw.githubusercontent.com/kuchris/xivaichat/main/dist/XivAiChat.zip",
+    "IconUrl": "https://raw.githubusercontent.com/kuchris/xivaichat/main/images/icon.png",
+    "ImageUrls": [
+      "https://raw.githubusercontent.com/kuchris/xivaichat/main/images/icon.png"
+    ],
+    "Tags": [
+      "cwls",
+      "chat",
+      "lmstudio",
+      "ai",
+      "dev"
+    ]
+  }
+]

@@ -50,7 +50,7 @@ $repoEntries[0].DalamudApiLevel = $pluginManifest.DalamudApiLevel
 $repoEntries[0].TestingDalamudApiLevel = $pluginManifest.DalamudApiLevel
 $repoEntries[0].LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 
-$repoEntries | ConvertTo-Json -Depth 10 | Set-Content -Path $repoJsonPath -Encoding utf8
+@($repoEntries) | ConvertTo-Json -Depth 10 | Set-Content -Path $repoJsonPath -Encoding utf8
 
 Compress-Archive -Path $files -DestinationPath $zipPath -Force
 Write-Host "Created $zipPath"
