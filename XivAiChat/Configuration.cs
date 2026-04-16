@@ -43,6 +43,8 @@ public sealed class Configuration : IPluginConfiguration
 
     public int ReplyDelayMilliseconds { get; set; } = 1500;
 
+    public bool UseExaSearch { get; set; }
+
     public int CooldownSeconds { get; set; } = 30;
 
     public int MaxHistoryMessages { get; set; } = 8;

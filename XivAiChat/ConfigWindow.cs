@@ -93,6 +93,8 @@ public sealed class ConfigWindow : Window, IDisposable
 
         DrawProviderSection(configuration);
         ImGui.Spacing();
+        DrawExaSection(configuration);
+        ImGui.Spacing();
         DrawChannelSection(configuration);
         ImGui.Spacing();
         DrawBehaviorSection(configuration);
@@ -194,6 +196,21 @@ public sealed class ConfigWindow : Window, IDisposable
 
             ImGui.TextWrapped("`gemini-*` models use Google's OpenAI-compatible chat endpoint. `gemma-*` models are auto-routed to Google's native Gemini API path. `gemini-3.1-flash-lite` is sent as `gemini-3.1-flash-lite-preview` for compatibility.");
         }
+    }
+
+    private void DrawExaSection(Configuration configuration)
+    {
+        ImGui.Text("Web Search (Exa)");
+
+        var useExaSearch = configuration.UseExaSearch;
+        if (ImGui.Checkbox("Enable Exa web search", ref useExaSearch))
+        {
+            configuration.UseExaSearch = useExaSearch;
+            this.plugin.SaveConfiguration();
+        }
+
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker("When enabled, the AI searches the web via Exa before each reply. Uses the free Exa MCP server — no API key needed.");
     }
 
     private void DrawBehaviorSection(Configuration configuration)

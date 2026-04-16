@@ -21,16 +21,17 @@ public sealed class LmStudioClient : IDisposable
     public async Task<string> CreateReplyAsync(
         Configuration configuration,
         IReadOnlyList<ChatTurn> history,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? searchContext = null)
     {
         configuration.EnsureDefaults();
         var normalizedConfiguration = CloneWithNormalizedModel(configuration);
 
         return normalizedConfiguration.Provider switch
         {
-            AiProvider.LmStudio => await this.CreateLmStudioReplyAsync(normalizedConfiguration, history, cancellationToken),
-            AiProvider.Gemini => await this.CreateGeminiReplyAsync(normalizedConfiguration, history, cancellationToken),
-            _ => await this.CreateOpenAiCompatibleReplyAsync(normalizedConfiguration, history, cancellationToken, isGemini: false),
+            AiProvider.LmStudio => await this.CreateLmStudioReplyAsync(normalizedConfiguration, history, cancellationToken, searchContext),
+            AiProvider.Gemini => await this.CreateGeminiReplyAsync(normalizedConfiguration, history, cancellationToken, searchContext),
+            _ => await this.CreateOpenAiCompatibleReplyAsync(normalizedConfiguration, history, cancellationToken, isGemini: false, searchContext),
         };
     }
 
@@ -67,7 +68,8 @@ public sealed class LmStudioClient : IDisposable
     private async Task<string> CreateLmStudioReplyAsync(
         Configuration configuration,
         IReadOnlyList<ChatTurn> history,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? searchContext = null)
     {
         if (TryBuildLmStudioResponsesEndpoint(configuration.Endpoint, out var responsesEndpoint))
         {
@@ -75,7 +77,8 @@ public sealed class LmStudioClient : IDisposable
                 responsesEndpoint,
                 configuration,
                 history,
-                cancellationToken);
+                cancellationToken,
+                searchContext);
 
             if (!string.IsNullOrWhiteSpace(responsesReply))
             {
@@ -89,7 +92,8 @@ public sealed class LmStudioClient : IDisposable
                 nativeEndpoint,
                 configuration,
                 history,
-                cancellationToken);
+                cancellationToken,
+                searchContext);
 
             if (!string.IsNullOrWhiteSpace(nativeReply))
             {
@@ -102,31 +106,32 @@ public sealed class LmStudioClient : IDisposable
             var fallbackConfiguration = CloneConfiguration(configuration);
             fallbackConfiguration.Endpoint = chatCompletionsEndpoint;
             fallbackConfiguration.EnsureDefaults();
-            return await this.CreateOpenAiCompatibleReplyAsync(fallbackConfiguration, history, cancellationToken, isGemini: false);
+            return await this.CreateOpenAiCompatibleReplyAsync(fallbackConfiguration, history, cancellationToken, isGemini: false, searchContext);
         }
 
-        return await this.CreateOpenAiCompatibleReplyAsync(configuration, history, cancellationToken, isGemini: false);
+        return await this.CreateOpenAiCompatibleReplyAsync(configuration, history, cancellationToken, isGemini: false, searchContext);
     }
 
     private async Task<string> CreateGeminiReplyAsync(
         Configuration configuration,
         IReadOnlyList<ChatTurn> history,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? searchContext = null)
     {
         try
         {
             if (IsGemmaOnGeminiModel(configuration.Model))
             {
-                return await this.CreateGeminiNativeReplyAsync(configuration, history, cancellationToken);
+                return await this.CreateGeminiNativeReplyAsync(configuration, history, cancellationToken, searchContext);
             }
 
-            return await this.CreateOpenAiCompatibleReplyAsync(configuration, history, cancellationToken, isGemini: true);
+            return await this.CreateOpenAiCompatibleReplyAsync(configuration, history, cancellationToken, isGemini: true, searchContext);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable &&
                                              !string.Equals(configuration.Model, "gemini-2.5-flash", StringComparison.Ordinal))
         {
             var fallbackConfiguration = CloneWithModel(configuration, "gemini-2.5-flash");
-            return await this.CreateOpenAiCompatibleReplyAsync(fallbackConfiguration, history, cancellationToken, isGemini: true);
+            return await this.CreateOpenAiCompatibleReplyAsync(fallbackConfiguration, history, cancellationToken, isGemini: true, searchContext);
         }
     }
 
@@ -134,11 +139,12 @@ public sealed class LmStudioClient : IDisposable
         Configuration configuration,
         IReadOnlyList<ChatTurn> history,
         CancellationToken cancellationToken,
-        bool isGemini)
+        bool isGemini,
+        string? searchContext = null)
     {
         var request = new OpenAiChatCompletionsRequest(
             configuration.Model,
-            BuildOpenAiMessages(configuration, history),
+            BuildOpenAiMessages(configuration, history, searchContext),
             configuration.Temperature,
             configuration.MaxTokens,
             GetReasoningEffort(configuration, isGemini));
@@ -170,7 +176,8 @@ public sealed class LmStudioClient : IDisposable
     private async Task<string> CreateGeminiNativeReplyAsync(
         Configuration configuration,
         IReadOnlyList<ChatTurn> history,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? searchContext = null)
     {
         if (string.IsNullOrWhiteSpace(configuration.ApiKey))
         {
@@ -178,7 +185,7 @@ public sealed class LmStudioClient : IDisposable
         }
 
         var endpoint = BuildGeminiGenerateContentEndpoint(configuration.Model);
-        var systemInstruction = BuildGeminiSystemInstruction(configuration.SystemPrompt);
+        var systemInstruction = BuildGeminiSystemInstruction(configuration.SystemPrompt, searchContext);
         var request = new GeminiGenerateContentRequest(
             BuildGeminiContents(history),
             new GeminiContent(
@@ -213,13 +220,14 @@ public sealed class LmStudioClient : IDisposable
         string endpoint,
         Configuration configuration,
         IReadOnlyList<ChatTurn> history,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? searchContext = null)
     {
         try
         {
             var request = new OpenAiResponsesRequest(
                 configuration.Model,
-                BuildResponsesPrompt(configuration, history),
+                BuildResponsesPrompt(configuration, history, searchContext),
                 configuration.Temperature,
                 configuration.MaxTokens,
                 GetLmStudioReasoning(configuration));
@@ -249,13 +257,14 @@ public sealed class LmStudioClient : IDisposable
         string endpoint,
         Configuration configuration,
         IReadOnlyList<ChatTurn> history,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? searchContext = null)
     {
         try
         {
             var request = new LmStudioChatRequest(
                 configuration.Model,
-                BuildNativePrompt(history),
+                BuildNativePrompt(history, searchContext),
                 configuration.SystemPrompt,
                 configuration.Temperature,
                 configuration.MaxTokens,
@@ -283,13 +292,18 @@ public sealed class LmStudioClient : IDisposable
         }
     }
 
-    private static List<OpenAiChatMessage> BuildOpenAiMessages(Configuration configuration, IReadOnlyList<ChatTurn> history)
+    private static List<OpenAiChatMessage> BuildOpenAiMessages(Configuration configuration, IReadOnlyList<ChatTurn> history, string? searchContext = null)
     {
         var messages = new List<OpenAiChatMessage>
         {
             new("system", configuration.SystemPrompt),
             new("system", "Return only the final in-game reply. Keep it to one short line. Do not explain your reasoning. Do not mention instructions, analysis, the user, or previous conversation. Do not prefix the reply with AI:, Assistant:, or a speaker name."),
         };
+
+        if (!string.IsNullOrWhiteSpace(searchContext))
+        {
+            messages.Add(new OpenAiChatMessage("system", $"Use the following web search results only if they are relevant to answering the question:\n{searchContext}"));
+        }
 
         foreach (var turn in history)
         {
@@ -300,7 +314,7 @@ public sealed class LmStudioClient : IDisposable
         return messages;
     }
 
-    private static string BuildResponsesPrompt(Configuration configuration, IReadOnlyList<ChatTurn> history)
+    private static string BuildResponsesPrompt(Configuration configuration, IReadOnlyList<ChatTurn> history, string? searchContext = null)
     {
         var builder = new StringBuilder();
         builder.AppendLine(configuration.SystemPrompt);
@@ -310,6 +324,14 @@ public sealed class LmStudioClient : IDisposable
         builder.AppendLine("Do not explain your reasoning.");
         builder.AppendLine("Do not mention instructions, analysis, the user, or previous conversation.");
         builder.AppendLine("Do not prefix the reply with AI:, Assistant:, or a speaker name.");
+
+        if (!string.IsNullOrWhiteSpace(searchContext))
+        {
+            builder.AppendLine();
+            builder.AppendLine("Use the following web search results only if they are relevant to answering the question:");
+            builder.AppendLine(searchContext);
+        }
+
         builder.AppendLine();
         builder.AppendLine("Recent chat:");
 
@@ -327,13 +349,21 @@ public sealed class LmStudioClient : IDisposable
         return builder.ToString();
     }
 
-    private static string BuildNativePrompt(IReadOnlyList<ChatTurn> history)
+    private static string BuildNativePrompt(IReadOnlyList<ChatTurn> history, string? searchContext = null)
     {
         var builder = new StringBuilder();
         builder.AppendLine("Return only the final in-game reply.");
         builder.AppendLine("Keep it to one short line.");
         builder.AppendLine("Do not explain your reasoning.");
         builder.AppendLine("Do not prefix the reply with AI:, Assistant:, or a speaker name.");
+
+        if (!string.IsNullOrWhiteSpace(searchContext))
+        {
+            builder.AppendLine();
+            builder.AppendLine("Use the following web search results only if they are relevant to answering the question:");
+            builder.AppendLine(searchContext);
+        }
+
         builder.AppendLine();
         builder.AppendLine("Recent chat:");
 
@@ -367,10 +397,18 @@ public sealed class LmStudioClient : IDisposable
         return contents;
     }
 
-    private static string BuildGeminiSystemInstruction(string systemPrompt)
+    private static string BuildGeminiSystemInstruction(string systemPrompt, string? searchContext = null)
     {
         var builder = new StringBuilder();
         builder.AppendLine(systemPrompt.Trim());
+
+        if (!string.IsNullOrWhiteSpace(searchContext))
+        {
+            builder.AppendLine();
+            builder.AppendLine("Use the following web search results only if they are relevant to answering the question:");
+            builder.AppendLine(searchContext);
+        }
+
         builder.AppendLine();
         builder.AppendLine("Important:");
         builder.AppendLine("Only output the one final in-game reply.");
@@ -1079,6 +1117,7 @@ public sealed class LmStudioClient : IDisposable
             MaxTokens = configuration.MaxTokens,
             CooldownSeconds = configuration.CooldownSeconds,
             MaxHistoryMessages = configuration.MaxHistoryMessages,
+            UseExaSearch = configuration.UseExaSearch,
         };
     }
 

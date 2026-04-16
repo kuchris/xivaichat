@@ -39,6 +39,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly object historySync = new();
     private readonly SemaphoreSlim requestGate = new(1, 1);
     private readonly LmStudioClient lmStudioClient = new();
+    private readonly ExaSearchClient exaSearchClient = new();
     private readonly ConfigWindow configWindow;
     private readonly CancellationTokenSource disposalTokenSource = new();
     private string? lastProcessedFingerprint;
@@ -104,6 +105,7 @@ public sealed class Plugin : IDalamudPlugin
         this.disposalTokenSource.Dispose();
         this.requestGate.Dispose();
         this.lmStudioClient.Dispose();
+        this.exaSearchClient.Dispose();
     }
 
     private void OnCommand(string command, string args)
@@ -327,7 +329,18 @@ public sealed class Plugin : IDalamudPlugin
         try
         {
             var snapshot = this.GetHistorySnapshot(channel.Id);
-            var reply = await this.lmStudioClient.CreateReplyAsync(this.Configuration, snapshot, cancellationToken);
+
+            string? searchContext = null;
+            if (this.Configuration.UseExaSearch)
+            {
+                var lastUserMessage = snapshot.LastOrDefault(t => string.Equals(t.Role, "user", StringComparison.OrdinalIgnoreCase));
+                if (lastUserMessage is not null)
+                {
+                    searchContext = await this.exaSearchClient.SearchAsync(lastUserMessage.Content, cancellationToken);
+                }
+            }
+
+            var reply = await this.lmStudioClient.CreateReplyAsync(this.Configuration, snapshot, cancellationToken, searchContext);
             var sanitizedReply = SanitizeReply(reply);
             if (string.IsNullOrWhiteSpace(sanitizedReply))
             {
@@ -394,7 +407,13 @@ public sealed class Plugin : IDalamudPlugin
             var history = this.GetHistorySnapshot();
             history.Add(prompt);
 
-            var reply = await this.lmStudioClient.CreateReplyAsync(this.Configuration, history, cancellationToken);
+            string? searchContext = null;
+            if (this.Configuration.UseExaSearch)
+            {
+                searchContext = await this.exaSearchClient.SearchAsync(message, cancellationToken);
+            }
+
+            var reply = await this.lmStudioClient.CreateReplyAsync(this.Configuration, history, cancellationToken, searchContext);
             await Framework.RunOnTick(() => ChatGui.Print(SanitizeReply(reply), Tag));
         }
         catch (OperationCanceledException)
