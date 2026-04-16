@@ -1,7 +1,7 @@
 # XivAiChat
 
 <p align="center">
-  <img src="images/icon.png" alt="XivAiChat icon" width="160" />
+  <img src="images/icon.png" alt="XivAiChat icon" width="512" />
 </p>
 
 `XivAiChat` is a personal Dalamud plugin for Final Fantasy XIV that watches the chat channels you choose, sends recent channel history to an AI model, and either prints a draft locally or replies back into the same in-game channel.
