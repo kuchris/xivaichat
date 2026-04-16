@@ -2,6 +2,21 @@
 
 Personal Dalamud dev plugin that watches the FFXIV chat channels you choose, sends per-channel context to a local or API model, and either prints a draft locally or replies back into the same in-game channel.
 
+## Install From Custom Repo
+
+Add this custom repo URL in Dalamud:
+
+`https://raw.githubusercontent.com/kuchris/xivaichat/main/repo.json`
+
+Then:
+
+1. Open `/xlsettings`
+2. Go to `Experimental`
+3. Under `Custom Plugin Repositories`, add the URL above
+4. Save
+5. Open `/xlplugins`
+6. Find `XIV AI Chat` and install it
+
 ## What It Does
 
 - Watches multiple channels at the same time instead of only one CWLS.
