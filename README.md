@@ -17,24 +17,6 @@ Then:
 5. Open `/xlplugins`
 6. Find `XIV AI Chat` and install it
 
-## Auto Build
-
-This repo includes GitHub Actions automation for the custom repo flow.
-
-When you push to `main`, GitHub Actions will:
-
-- restore and build the plugin
-- run `tools/pack.ps1`
-- rebuild `dist/XivAiChat.zip`
-- sync `repo.json` to the built plugin version
-- commit updated generated files back to the repo
-
-That means your custom repo URL stays the same:
-
-`https://raw.githubusercontent.com/kuchris/xivaichat/main/repo.json`
-
-And users can keep updating from `/xlplugins` without you rebuilding and zipping everything by hand every time.
-
 ## What It Does
 
 - Watches multiple channels at the same time instead of only one CWLS.
