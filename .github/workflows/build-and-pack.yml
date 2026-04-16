@@ -1,0 +1,61 @@
+name: Build And Pack
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - dist/**
+      - repo.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-pack:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore XivAiChat.sln --configfile NuGet.Config
+
+      - name: Build
+        run: dotnet build XivAiChat.sln -c Debug --no-restore
+
+      - name: Pack custom repo zip
+        shell: pwsh
+        run: ./tools/pack.ps1
+
+      - name: Commit generated repo files
+        shell: pwsh
+        run: |
+          if (-not (git diff --quiet -- dist repo.json)) {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add dist repo.json
+            git commit -m "Update packaged plugin [skip ci]"
+            git push
+          } else {
+            Write-Host "No generated file changes to commit."
+          }
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XivAiChat
+          path: |
+            XivAiChat/bin/Debug/XivAiChat.dll
+            XivAiChat/bin/Debug/XivAiChat.json
+            XivAiChat/bin/Debug/XivAiChat.deps.json
+            dist/XivAiChat.zip
