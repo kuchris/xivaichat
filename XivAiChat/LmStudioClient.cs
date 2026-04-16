@@ -52,8 +52,9 @@ public sealed class LmStudioClient : IDisposable
 
             return ExtractLoadedLmStudioModel(body);
         }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            Plugin.Log.Debug(ex, "Failed to detect loaded LM Studio model.");
             return null;
         }
     }
@@ -237,8 +238,9 @@ public sealed class LmStudioClient : IDisposable
 
             return ExtractResponsesReplyText(body);
         }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            Plugin.Log.Debug(ex, "LM Studio Responses endpoint failed, falling back.");
             return null;
         }
     }
@@ -274,8 +276,9 @@ public sealed class LmStudioClient : IDisposable
 
             return ExtractNativeReplyText(body);
         }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            Plugin.Log.Debug(ex, "LM Studio native endpoint failed, falling back.");
             return null;
         }
     }

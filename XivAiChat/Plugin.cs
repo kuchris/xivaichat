@@ -40,10 +40,12 @@ public sealed class Plugin : IDalamudPlugin
     private readonly SemaphoreSlim requestGate = new(1, 1);
     private readonly LmStudioClient lmStudioClient = new();
     private readonly ConfigWindow configWindow;
+    private readonly CancellationTokenSource disposalTokenSource = new();
     private string? lastProcessedFingerprint;
 
-    private DateTimeOffset lastReplyAt = DateTimeOffset.MinValue;
-    private DateTimeOffset lastProcessedFingerprintAt = DateTimeOffset.MinValue;
+    // Stored as UTC ticks so Interlocked can provide thread-safe access.
+    private long lastReplyAtTicks = DateTimeOffset.MinValue.UtcTicks;
+    private long lastProcessedFingerprintAtTicks = DateTimeOffset.MinValue.UtcTicks;
 
     private sealed record ChatHistoryEntry(string ChannelId, LmStudioClient.ChatTurn Turn);
 
@@ -98,6 +100,8 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.RemoveHandler(CommandName);
         this.WindowSystem.RemoveAllWindows();
         this.configWindow.Dispose();
+        this.disposalTokenSource.Cancel();
+        this.disposalTokenSource.Dispose();
         this.requestGate.Dispose();
         this.lmStudioClient.Dispose();
     }
@@ -166,7 +170,7 @@ public sealed class Plugin : IDalamudPlugin
                     return;
                 }
 
-                _ = Task.Run(() => this.RunManualPromptAsync(rest));
+                _ = Task.Run(() => this.RunManualPromptAsync(rest, this.disposalTokenSource.Token));
                 ChatGui.Print("Sent a manual test prompt to the selected provider.", Tag);
                 break;
             case "help":
@@ -201,7 +205,7 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        _ = Task.Run(() => this.RunManualPromptAsync(message));
+        _ = Task.Run(() => this.RunManualPromptAsync(message, this.disposalTokenSource.Token));
     }
 
     public async Task<string?> TryDetectLmStudioModelAsync()
@@ -287,7 +291,7 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        if (DateTimeOffset.UtcNow - this.lastReplyAt < TimeSpan.FromSeconds(this.Configuration.CooldownSeconds))
+        if (DateTimeOffset.UtcNow - new DateTimeOffset(Interlocked.Read(ref this.lastReplyAtTicks), TimeSpan.Zero) < TimeSpan.FromSeconds(this.Configuration.CooldownSeconds))
         {
             this.LastDecision = $"Ignored: cooldown active for {this.Configuration.CooldownSeconds} seconds.";
             return;
@@ -295,25 +299,25 @@ public sealed class Plugin : IDalamudPlugin
 
         var fingerprint = $"{type}|{senderText}|{messageText}";
         if (this.lastProcessedFingerprint == fingerprint &&
-            DateTimeOffset.UtcNow - this.lastProcessedFingerprintAt < TimeSpan.FromSeconds(5))
+            DateTimeOffset.UtcNow - new DateTimeOffset(Interlocked.Read(ref this.lastProcessedFingerprintAtTicks), TimeSpan.Zero) < TimeSpan.FromSeconds(5))
         {
             this.LastDecision = "Ignored: duplicate event for the same message.";
             return;
         }
 
         this.lastProcessedFingerprint = fingerprint;
-        this.lastProcessedFingerprintAt = DateTimeOffset.UtcNow;
+        Interlocked.Exchange(ref this.lastProcessedFingerprintAtTicks, DateTimeOffset.UtcNow.UtcTicks);
 
         var turn = new LmStudioClient.ChatTurn("user", senderText, messageText);
         this.AddTurn(channel.Id, turn);
         this.LastDecision = $"Accepted: sending {channel.Label} context to the selected provider.";
 
-        _ = Task.Run(() => this.ProcessIncomingTurnAsync(channel));
+        _ = Task.Run(() => this.ProcessIncomingTurnAsync(channel, this.disposalTokenSource.Token));
     }
 
-    private async Task ProcessIncomingTurnAsync(ChatChannelDefinition channel)
+    private async Task ProcessIncomingTurnAsync(ChatChannelDefinition channel, CancellationToken cancellationToken)
     {
-        if (!await this.requestGate.WaitAsync(0))
+        if (!await this.requestGate.WaitAsync(0, cancellationToken))
         {
             this.LastDecision = "Ignored: another request is already running.";
             Log.Debug("Skipping chat reply because another AI request is already running.");
@@ -323,7 +327,7 @@ public sealed class Plugin : IDalamudPlugin
         try
         {
             var snapshot = this.GetHistorySnapshot(channel.Id);
-            var reply = await this.lmStudioClient.CreateReplyAsync(this.Configuration, snapshot, CancellationToken.None);
+            var reply = await this.lmStudioClient.CreateReplyAsync(this.Configuration, snapshot, cancellationToken);
             var sanitizedReply = SanitizeReply(reply);
             if (string.IsNullOrWhiteSpace(sanitizedReply))
             {
@@ -337,7 +341,7 @@ public sealed class Plugin : IDalamudPlugin
                 await Task.Delay(this.Configuration.ReplyDelayMilliseconds);
             }
 
-            this.lastReplyAt = DateTimeOffset.UtcNow;
+            Interlocked.Exchange(ref this.lastReplyAtTicks, DateTimeOffset.UtcNow.UtcTicks);
             this.AddTurn(channel.Id, new LmStudioClient.ChatTurn("assistant", "AI", sanitizedReply));
 
             await Framework.RunOnTick(() =>
@@ -366,6 +370,10 @@ public sealed class Plugin : IDalamudPlugin
                 }
             });
         }
+        catch (OperationCanceledException)
+        {
+            // Plugin is being disposed; silently abort.
+        }
         catch (Exception ex)
         {
             this.LastDecision = $"AI request failed: {ex.Message}";
@@ -378,7 +386,7 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private async Task RunManualPromptAsync(string message)
+    private async Task RunManualPromptAsync(string message, CancellationToken cancellationToken)
     {
         try
         {
@@ -386,8 +394,12 @@ public sealed class Plugin : IDalamudPlugin
             var history = this.GetHistorySnapshot();
             history.Add(prompt);
 
-            var reply = await this.lmStudioClient.CreateReplyAsync(this.Configuration, history, CancellationToken.None);
+            var reply = await this.lmStudioClient.CreateReplyAsync(this.Configuration, history, cancellationToken);
             await Framework.RunOnTick(() => ChatGui.Print(SanitizeReply(reply), Tag));
+        }
+        catch (OperationCanceledException)
+        {
+            // Plugin is being disposed; silently abort.
         }
         catch (Exception ex)
         {
@@ -568,7 +580,7 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private static string SanitizeReply(string reply)
+    private string SanitizeReply(string reply)
     {
         var builder = new StringBuilder(reply.Length);
         foreach (var character in reply)
@@ -599,7 +611,7 @@ public sealed class Plugin : IDalamudPlugin
             : singleLine[..MaxReplyLength];
     }
 
-    private static string SanitizeReplyForGame(string reply)
+    private string SanitizeReplyForGame(string reply)
     {
         var normalized = SanitizeReply(reply);
 
@@ -635,9 +647,9 @@ public sealed class Plugin : IDalamudPlugin
         return TrimToUtf8ByteCount(cleaned, MaxGameMessageBytes);
     }
 
-    private static string StripSpeakerPrefix(string text)
+    private string StripSpeakerPrefix(string text)
     {
-        var prefixes = new[]
+        var prefixes = new List<string>
         {
             "AI:",
             "AI：",
@@ -647,9 +659,13 @@ public sealed class Plugin : IDalamudPlugin
             "Reply：",
             "Answer:",
             "Answer：",
-            "Kurisu Tan:",
-            "Kurisu Tan：",
         };
+
+        if (PlayerState.IsLoaded && !string.IsNullOrWhiteSpace(PlayerState.CharacterName))
+        {
+            prefixes.Add($"{PlayerState.CharacterName}:");
+            prefixes.Add($"{PlayerState.CharacterName}：");
+        }
 
         foreach (var prefix in prefixes)
         {
