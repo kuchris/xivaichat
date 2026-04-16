@@ -5,7 +5,7 @@ namespace XivAiChat;
 
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 5;
+    public int Version { get; set; } = 6;
 
     public bool Enabled { get; set; }
 
@@ -39,7 +39,9 @@ public sealed class Configuration : IPluginConfiguration
 
     public string ReasoningEffort { get; set; } = "low";
 
-    public int MaxTokens { get; set; } = 300;
+    public int MaxTokens { get; set; } = 4000;
+
+    public int ReplyDelayMilliseconds { get; set; } = 1500;
 
     public int CooldownSeconds { get; set; } = 30;
 
@@ -73,6 +75,7 @@ public sealed class Configuration : IPluginConfiguration
         }
 
         this.PromptPresets = NormalizePromptPresets(this.PromptPresets);
+        SyncBuiltInPresetContent(this.PromptPresets);
         MergeBuiltInPresets(this.PromptPresets);
         SortPromptPresets(this.PromptPresets);
 
@@ -102,18 +105,31 @@ public sealed class Configuration : IPluginConfiguration
         {
             this.ActivePromptPreset = BuiltInPromptPresets.EnglishName;
             this.SystemPrompt = BuiltInPromptPresets.EnglishPrompt;
-            if (this.MaxTokens < 300)
+        }
+
+        if (this.Version < 6)
+        {
+            this.MaxTokens = Math.Max(this.MaxTokens, 4000);
+            if (this.ReplyDelayMilliseconds <= 0)
             {
-                this.MaxTokens = 300;
+                this.ReplyDelayMilliseconds = 1500;
             }
         }
 
-        if (string.IsNullOrWhiteSpace(this.SystemPrompt))
+        var activePrompt = this.GetActivePrompt();
+        if (activePrompt is not null &&
+            BuiltInPromptPresets.IsBuiltInName(this.ActivePromptPreset))
         {
-            this.SystemPrompt = this.GetActivePrompt()?.Prompt ?? BuiltInPromptPresets.EnglishPrompt;
+            this.SystemPrompt = activePrompt.Prompt;
+        }
+        else if (string.IsNullOrWhiteSpace(this.SystemPrompt))
+        {
+            this.SystemPrompt = activePrompt?.Prompt ?? BuiltInPromptPresets.EnglishPrompt;
         }
 
-        this.Version = 5;
+        this.MaxTokens = Math.Clamp(this.MaxTokens, 64, 4000);
+        this.ReplyDelayMilliseconds = Math.Clamp(this.ReplyDelayMilliseconds, 0, 30000);
+        this.Version = 6;
     }
 
     public PromptPreset? GetActivePrompt()
@@ -279,6 +295,20 @@ public sealed class Configuration : IPluginConfiguration
         }
     }
 
+    private static void SyncBuiltInPresetContent(List<PromptPreset> presets)
+    {
+        foreach (var preset in presets)
+        {
+            var builtInPrompt = GetBuiltInPrompt(preset.Name);
+            if (builtInPrompt is null)
+            {
+                continue;
+            }
+
+            preset.Prompt = builtInPrompt;
+        }
+    }
+
     private static void SortPromptPresets(List<PromptPreset> presets)
     {
         presets.Sort(static (left, right) =>
@@ -352,27 +382,24 @@ public static class BuiltInPromptPresets
 
     public const string EnglishPrompt =
         """
-        You are a friend chatting in a Final Fantasy XIV CWLS. You are not a customer support bot or assistant, and you never explain your reasoning.
+        You are a Final Fantasy XIV player chatting in game. You are not an assistant, and you never explain your reasoning.
 
         Rules:
         1. Output only the final line that should be sent in game.
-        2. Keep it natural, short, and casual, like a real player chatting with friends.
-        3. Usually reply in 1 sentence, at most 2 short sentences.
-        4. Match the chat language naturally. If people are using Traditional Chinese or Japanese, you may reply in that language when it fits.
+        2. Reply in English only.
+        3. Keep it natural, short, and casual, like a real player chatting with friends.
+        4. Usually reply in 1 sentence, at most 2 short sentences.
         5. Do not add prefixes like AI:, Assistant:, Reply:, or speaker names.
         6. Do not explain rules, summarize context, or describe your thinking.
         7. Do not use analysis phrases like "I need to", "first", "the user said", or similar meta commentary.
-        8. A little warmth, teasing, or group-chat energy is okay, but do not overdo it.
-        9. Avoid unstable special symbols or emoji that may not send well in game chat.
-        10. If someone is clearly just testing, answer with a short and natural test-like reply.
+        8. Do not use emoji characters. Simple text-style emoticons or kaomoji are okay.
+        9. If someone is clearly just testing, answer with a short and natural test-like reply.
 
         Style:
         - Like an MMO friend
-        - Like CWLS small talk
+        - Like in-game small talk
         - Short, smooth, and natural
         - Friendly, but not overly formal
-
-        Your only job is to generate one natural reply that can be sent directly into CWLS.
         """;
 
     public const string GameAiPrompt =
@@ -392,6 +419,7 @@ public static class BuiltInPromptPresets
         - Do not add prefixes like AI: or Assistant:
         - If unsure, answer casually and honestly.
         - If someone is joking, you can joke back lightly.
+        - Do not use emoji characters. Simple text-style emoticons or kaomoji are okay.
         - Use Traditional Chinese only, never Simplified Chinese.
 
         Style:
@@ -401,29 +429,24 @@ public static class BuiltInPromptPresets
 
     public const string TraditionalChinesePrompt =
         """
-        ä½ æ˜¯ä¸€å€‹åœ¨ã€ŠFinal Fantasy XIVã€‹CWLS è£¡èŠå¤©çš„å°ç£çŽ©å®¶æœ‹å‹ï¼Œä¸æ˜¯å®¢æœã€ä¸æ˜¯åŠ©æ‰‹ï¼Œä¹Ÿä¸è¦è§£é‡‹è‡ªå·±çš„æ€è€ƒéŽç¨‹ã€‚
+        你是在《Final Fantasy XIV》遊戲內聊天的玩家，不是助手，也不要解釋自己的思考過程。
 
-        å›žè¦†è¦å‰‡ï¼š
-        1. åªè¼¸å‡ºæœ€å¾Œè¦é€åˆ°éŠæˆ²èŠå¤©æ¬„çš„ä¸€å¥è©±ã€‚
-        2. ä¸€å¾‹ä½¿ç”¨ç¹é«”ä¸­æ–‡ï¼Œå£æ°£åå°ç£çŽ©å®¶å¹³å¸¸èŠå¤©çš„èªªæ³•ã€‚
-        3. èªžæ°£è‡ªç„¶ã€è¼•é¬†ã€æœ‰æœ‹å‹æ„Ÿï¼Œåƒåœ¨ç¾¤çµ„è£¡å›žè©±ã€‚
-        4. ç›¡é‡ç°¡çŸ­ï¼Œé€šå¸¸ 1 å¥ï¼Œæœ€å¤š 2 å¥ã€‚
-        5. å¯ä»¥ç”¨å°ç£å¸¸è¦‹å£èªžï¼Œä½†ä¸è¦æ¯å¥éƒ½ç¡¬å¡žã€‚
-        6. ä¸è¦ç”¨ä¸­åœ‹å¸¸è¦‹ç”¨èªžï¼Œä¾‹å¦‚ã€Œç”¨æˆ¶ã€ã€Œå›žè¦†ã€ã€Œè¦–é »ã€ã€Œè³ªé‡ã€é€™é¡žè©žã€‚
-        7. ä¸è¦è¼¸å‡ºã€ŒAI:ã€ã€ŒåŠ©æ‰‹ï¼šã€ã€Œå›žè¦†ï¼šã€é€™é¡žå‰ç¶´ã€‚
-        8. ä¸è¦åˆ†æžä¸Šä¸‹æ–‡ï¼Œä¸è¦è§£é‡‹è¦å‰‡ï¼Œä¸è¦å¯«æŽ¨ç†éŽç¨‹ï¼Œä¸è¦å‡ºç¾ã€Œæˆ‘éœ€è¦ã€ã€Œé¦–å…ˆã€ã€Œä½¿ç”¨è€…èªªã€é€™ç¨®å¥å­ã€‚
-        9. é¿å…ä½¿ç”¨éŠæˆ²è£¡ä¸ç©©å®šçš„ç‰¹æ®Šç¬¦è™Ÿæˆ– emojiã€‚
-        10. å¦‚æžœå°æ–¹åªæ˜¯åœ¨æ¸¬è©¦ï¼Œå°±è‡ªç„¶å›žä¸€å¥ï¼Œä¸è¦å¤ªæ­£å¼ã€‚
-        11. å¦‚æžœå°æ–¹åœ¨é–‹çŽ©ç¬‘ï¼Œå¯ä»¥é †è‘—åæ§½ï¼›å¦‚æžœå°æ–¹èªžæ°£èªçœŸï¼Œå°±æ­£å¸¸å›žè¦†ï¼Œä¸è¦å¤ªé¬§ã€‚
+        規則：
+        1. 只輸出最後要送出的那一句話。
+        2. 一律只用繁體中文回覆。
+        3. 語氣自然、輕鬆，像真人玩家在聊天。
+        4. 盡量簡短，通常 1 句，最多 2 句。
+        5. 不要加上 AI:、助手：、回覆：或角色名稱前綴。
+        6. 不要解釋規則、摘要上下文或寫出思考過程。
+        7. 不要用「我需要」、「首先」、「使用者說」這類分析語氣。
+        8. 不要使用 emoji 字元，但可以使用簡單的文字表情或顏文字。
+        9. 如果對方只是在測試，就自然簡短回一句。
 
-        é¢¨æ ¼æ–¹å‘ï¼š
-        - åƒå°ç£çŽ©å®¶åœ¨èŠå¤©
-        - åƒç†Ÿäººç¾¤çµ„è¬›è©±
-        - çŸ­ã€é †ã€è‡ªç„¶
-        - æœ‰é»žæœ‹å‹æ„Ÿï¼Œä½†ä¸è¦å¤ªæ²¹
-
-        ä½ çš„ä»»å‹™åªæœ‰ä¸€å€‹ï¼š
-        æ ¹æ“šèŠå¤©å…§å®¹ï¼Œç”¢ç”Ÿä¸€æ¢å¯ä»¥ç›´æŽ¥é€åˆ° CWLS çš„è‡ªç„¶ç¹é«”ä¸­æ–‡å›žè¦†ã€‚
+        風格：
+        - 像 MMO 朋友
+        - 像遊戲內群聊
+        - 短、順、自然
+        - 友善但不油
         """;
 
     public const string JapanesePrompt =
@@ -439,19 +462,14 @@ public static class BuiltInPromptPresets
         6. 「AI:」「Assistant:」「返答:」などの前置きは付けない。
         7. ルール説明、状況説明、思考過程、分析は一切書かない。
         8. 「まず」「ユーザーは」「私は〜する必要がある」などの分析っぽい言い回しは禁止。
-        9. 少しくだけた言い方や軽いノリはOK。ただしやりすぎない。
-        10. ゲーム内で不安定な特殊記号や絵文字はなるべく使わない。
-        11. 相手がテストしているだけなら、軽く自然に一言返す。
-        12. 相手が冗談っぽいなら少しノってよいが、真面目な話題では普通に返す。
+        9. emoji の文字は使わない。シンプルな顔文字や文字の雰囲気表現はOK。
+        10. 相手がテストしているだけなら、軽く自然に一言返す。
 
         雰囲気:
         - MMOのフレンドっぽい
         - ゲーム内チャットの雑談っぽい
         - 短くて自然
         - ちょっと親しみがある
-
-        あなたの仕事は一つだけです。
-        会話内容に合わせて、ゲーム内にそのまま送れる自然な日本語の返事を一言だけ作ってください。
         """;
 
     public static List<PromptPreset> CreateList()

@@ -224,11 +224,21 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGuiComponents.HelpMarker("Used for the local LM Studio native endpoint. API providers use their own settings.");
 
         var maxTokens = configuration.MaxTokens;
-        if (ImGui.SliderInt("Max tokens", ref maxTokens, 64, 1200))
+        if (ImGui.SliderInt("Max tokens", ref maxTokens, 64, 4000))
         {
             configuration.MaxTokens = maxTokens;
             this.plugin.SaveConfiguration();
         }
+
+        var replyDelay = configuration.ReplyDelayMilliseconds;
+        if (ImGui.SliderInt("Reply delay (ms)", ref replyDelay, 0, 30000))
+        {
+            configuration.ReplyDelayMilliseconds = replyDelay;
+            this.plugin.SaveConfiguration();
+        }
+
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker("Adds a small wait before automatic replies are printed or sent, so the bot feels less instant.");
 
         var cooldown = configuration.CooldownSeconds;
         if (ImGui.SliderInt("Cooldown seconds", ref cooldown, 0, 600))
@@ -401,7 +411,7 @@ public sealed class ConfigWindow : Window, IDisposable
                 configuration.Endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
                 configuration.Model = "gemini-2.5-flash-lite";
                 configuration.ReasoningEffort = string.IsNullOrWhiteSpace(configuration.ReasoningEffort) ? "low" : configuration.ReasoningEffort;
-                configuration.MaxTokens = Math.Max(configuration.MaxTokens, 300);
+                configuration.MaxTokens = Math.Max(configuration.MaxTokens, 4000);
                 break;
             case AiProvider.OpenAiCompatible:
                 configuration.Endpoint =

@@ -331,6 +331,12 @@ public sealed class Plugin : IDalamudPlugin
                 return;
             }
 
+            if (this.Configuration.ReplyDelayMilliseconds > 0)
+            {
+                this.LastDecision = $"Provider replied. Waiting {this.Configuration.ReplyDelayMilliseconds} ms before posting.";
+                await Task.Delay(this.Configuration.ReplyDelayMilliseconds);
+            }
+
             this.lastReplyAt = DateTimeOffset.UtcNow;
             this.AddTurn(channel.Id, new LmStudioClient.ChatTurn("assistant", "AI", sanitizedReply));
 
