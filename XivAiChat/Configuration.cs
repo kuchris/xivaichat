@@ -11,6 +11,8 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool SendReplies { get; set; }
 
+    public bool RequireApprovalBeforeReply { get; set; }
+
     public int CwlsSlot { get; set; } = 1;
 
     public List<string> WatchedChannelIds { get; set; } = ["cwl1"];
@@ -47,7 +49,15 @@ public sealed class Configuration : IPluginConfiguration
 
     public int CooldownSeconds { get; set; } = 30;
 
+    public int ReplyAfterMessageCount { get; set; } = 1;
+
     public int MaxHistoryMessages { get; set; } = 8;
+
+    public float DraftPopupPositionX { get; set; } = -1f;
+
+    public float DraftPopupPositionY { get; set; } = -1f;
+
+    public bool ShowDraftPopup { get; set; }
 
     private IDalamudPluginInterface? pluginInterface;
 
@@ -131,6 +141,7 @@ public sealed class Configuration : IPluginConfiguration
 
         this.MaxTokens = Math.Clamp(this.MaxTokens, 64, 4000);
         this.ReplyDelayMilliseconds = Math.Clamp(this.ReplyDelayMilliseconds, 0, 30000);
+        this.ReplyAfterMessageCount = Math.Clamp(this.ReplyAfterMessageCount, 1, 20);
         this.Version = 6;
     }
 
@@ -155,23 +166,34 @@ public sealed class Configuration : IPluginConfiguration
         this.SystemPrompt = preset.Prompt;
     }
 
-    public void SaveCurrentPromptToActivePreset()
+    public bool SaveCurrentPromptToActivePreset()
     {
         var preset = this.GetActivePrompt();
         if (preset is null)
         {
-            return;
+            return false;
+        }
+
+        if (BuiltInPromptPresets.IsBuiltInName(preset.Name))
+        {
+            return false;
         }
 
         preset.Prompt = this.SystemPrompt;
+        return true;
     }
 
-    public void UpsertPromptPreset(string presetName, string prompt)
+    public bool UpsertPromptPreset(string presetName, string prompt)
     {
         var name = CanonicalizePresetName(presetName);
         if (string.IsNullOrWhiteSpace(name))
         {
-            return;
+            return false;
+        }
+
+        if (BuiltInPromptPresets.IsBuiltInName(name))
+        {
+            return false;
         }
 
         var existing = this.PromptPresets.FirstOrDefault(
@@ -193,6 +215,7 @@ public sealed class Configuration : IPluginConfiguration
         SortPromptPresets(this.PromptPresets);
         this.ActivePromptPreset = name;
         this.SystemPrompt = prompt;
+        return true;
     }
 
     public bool DeletePromptPreset(string presetName)
@@ -203,6 +226,11 @@ public sealed class Configuration : IPluginConfiguration
         }
 
         var canonicalName = CanonicalizePresetName(presetName);
+        if (BuiltInPromptPresets.IsBuiltInName(canonicalName))
+        {
+            return false;
+        }
+
         var removed = this.PromptPresets.RemoveAll(
             item => string.Equals(item.Name, canonicalName, StringComparison.Ordinal));
 

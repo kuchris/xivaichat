@@ -4,7 +4,7 @@
   <img src="images/icon.png" alt="XivAiChat icon" width="512" />
 </p>
 
-`XivAiChat` is a personal Dalamud plugin for Final Fantasy XIV that watches the chat channels you choose, sends recent channel history to an AI model, and either prints a draft locally or replies back into the same in-game channel.
+`XivAiChat` is a personal Dalamud plugin for Final Fantasy XIV that watches the chat channels you choose, keeps recent per-channel history, and lets an AI draft lightweight in-game replies that you can review, print locally, or send back into the same channel.
 
 It is built for lightweight in-game conversations rather than long assistant-style responses. The plugin keeps per-channel context, supports local LM Studio as well as API providers, and includes saved prompt presets directly in the config window.
 
@@ -12,10 +12,15 @@ It is built for lightweight in-game conversations rather than long assistant-sty
 
 - Watch multiple FFXIV chat channels at the same time
 - Keep separate recent history for each watched channel
+- Keep a floating `Reply Drafts` popup visible while the plugin is running
 - Ignore your own messages to reduce reply loops
 - Require a mention or alias before replying
+- Delay auto-generation until after a configurable number of accepted chat messages
+- Manually trigger generation with `Read Situation`
+- Review pending drafts in a floating popup before approving them
 - Print replies locally first, or auto-send them into the source channel
 - Save and switch system prompt presets in game
+- Quick-switch built-in language presets for English, Traditional Chinese, and Japanese
 - Support LM Studio, OpenAI-compatible endpoints, and Gemini
 - Optionally add Exa web search context before generating a reply
 - Trim and sanitize replies to stay within FFXIV chat limits
@@ -49,7 +54,7 @@ The packaged plugin zip is published from:
 
 1. Build the project
 2. Open `/xlsettings`
-3. Add the build output folder under `Experimental > Dev Plugin Locations`
+3. Add `XivAiChat\bin\Debug` under `Experimental > Dev Plugin Locations`
 4. Open `/xlplugins`
 5. Go to `Dev Tools > Installed Dev Plugins`
 6. Enable `XIV AI Chat`
@@ -97,30 +102,59 @@ Built-in presets:
 You can:
 
 - switch presets in game
+- switch language quickly with config buttons, popup buttons, or slash commands
 - load the active preset back into the editor
-- save edits to the active preset
+- save edits to custom presets
 - create custom presets
 - delete custom presets
 
+Built-in presets are read-only:
+
+- `English`
+- `Traditional Chinese`
+- `Japanese`
+- `Game AI`
+
+To customize one of them, create a new preset based on it.
+
+## Draft Popup
+
+The floating `Reply Drafts` window is the main approval surface for AI output.
+
+- It can stay visible all the time with `Show Reply Drafts`
+- It includes quick language buttons: `EN`, `中`, `日`
+- It includes a gear button that toggles the full config window
+- It shows pending drafts with `OK` and `Dismiss`
+- It includes `Read Situation` for manual generation from the most recently active watched channel
+
+`Read Situation` uses stored watched-channel history from the current plugin session. It does not read backlog from before the plugin was loaded.
+
 ## Recommended First Run
 
-1. Leave `Auto-send replies` off so the plugin prints drafts locally
+1. Turn on `Show Reply Drafts` so the popup stays visible
 2. Pick a provider
 3. If you use LM Studio, start its local server and use `Detect loaded model`
 4. Choose the channels to watch
 5. Keep `Require mention or alias` enabled at first
-6. Pick a prompt preset
-7. Run a quick manual test from the config window
-8. Turn on `Auto-send replies` only after the output looks safe
+6. Decide whether to use `Require OK before replying`
+7. Pick a prompt preset or use the quick language switches
+8. Set `Reply after chats` higher than `1` if you want fewer auto-generations
+9. Run a quick manual test from the config window or use `Read Situation`
+10. Turn on `Auto-send replies` only after the output looks safe
 
 ## Behavior Notes
 
 - Replies are generated from recent history in the same channel that triggered the response
+- Watched-channel history is stored for the current session, even if a message does not trigger auto-reply
 - Only one AI request runs at a time
 - Duplicate chat events are ignored for a short window
+- `Reply after chats` counts accepted messages in the same watched channel before generation
+- `Require OK before replying` queues drafts for approval instead of posting immediately
+- The draft popup can stay open even when there are no pending drafts
 - Replies are rate-limited by the configured cooldown
 - Outgoing text is cleaned up before sending to the game chat box
 - If in-game dispatch fails, the plugin falls back to printing the reply locally
+- If an OpenAI-compatible provider returns an empty visible reply, the plugin retries once with a stricter instruction
 
 ## Slash Commands
 
@@ -135,11 +169,16 @@ You can:
 - `/xivaichat endpoint <url>`
 - `/xivaichat model <name>`
 - `/xivaichat prompt <text>`
+- `/xivaichat lang en|zh|ja`
+- `/xivaichat en`
+- `/xivaichat zh`
+- `/xivaichat ja`
 - `/xivaichat alias <word>`
 - `/xivaichat alias clear`
 - `/xivaichat mention on`
 - `/xivaichat mention off`
 - `/xivaichat cooldown <0-600>`
+- `/xivaichat after <1-20>`
 - `/xivaichat test <message>`
 
 `/xivaichat slot <1-8>` is a shortcut that replaces the watched channel list with a single CWLS slot. For multi-channel setups, use the config window.

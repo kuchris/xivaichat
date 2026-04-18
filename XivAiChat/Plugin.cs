@@ -37,11 +37,18 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly List<ChatHistoryEntry> recentTurns = [];
     private readonly object historySync = new();
+    private readonly object backgroundTaskSync = new();
+    private readonly object pendingReplySync = new();
     private readonly SemaphoreSlim requestGate = new(1, 1);
     private readonly LmStudioClient lmStudioClient = new();
     private readonly ExaSearchClient exaSearchClient = new();
     private readonly ConfigWindow configWindow;
+    private readonly DraftPopupWindow draftPopupWindow;
     private readonly CancellationTokenSource disposalTokenSource = new();
+    private readonly List<Task> backgroundTasks = [];
+    private readonly List<PendingReply> pendingReplies = [];
+    private readonly Dictionary<string, int> pendingReplyCountsByChannel = new(StringComparer.Ordinal);
+    private string? lastActiveChannelId;
     private string? lastProcessedFingerprint;
 
     // Stored as UTC ticks so Interlocked can provide thread-safe access.
@@ -49,6 +56,7 @@ public sealed class Plugin : IDalamudPlugin
     private long lastProcessedFingerprintAtTicks = DateTimeOffset.MinValue.UtcTicks;
 
     private sealed record ChatHistoryEntry(string ChannelId, LmStudioClient.ChatTurn Turn);
+    private sealed record PendingReply(Guid Id, ChatChannelDefinition Channel, string ReplyText, DateTimeOffset CreatedAtUtc);
 
     public Plugin()
     {
@@ -56,8 +64,10 @@ public sealed class Plugin : IDalamudPlugin
         this.Configuration.Initialize(PluginInterface);
         this.WindowSystem = new WindowSystem("XivAiChat");
         this.configWindow = new ConfigWindow(this);
+        this.draftPopupWindow = new DraftPopupWindow(this);
 
         this.WindowSystem.AddWindow(this.configWindow);
+        this.WindowSystem.AddWindow(this.draftPopupWindow);
 
         CommandManager.AddHandler(
             CommandName,
@@ -91,6 +101,17 @@ public sealed class Plugin : IDalamudPlugin
 
     public string LastSeenMessage { get; private set; } = "-";
 
+    public bool HasPendingReplies
+    {
+        get
+        {
+            lock (this.pendingReplySync)
+            {
+                return this.pendingReplies.Count > 0;
+            }
+        }
+    }
+
     public void Dispose()
     {
         ChatGui.ChatMessage -= this.OnChatMessage;
@@ -102,6 +123,7 @@ public sealed class Plugin : IDalamudPlugin
         this.WindowSystem.RemoveAllWindows();
         this.configWindow.Dispose();
         this.disposalTokenSource.Cancel();
+        this.WaitForBackgroundTasks();
         this.disposalTokenSource.Dispose();
         this.requestGate.Dispose();
         this.lmStudioClient.Dispose();
@@ -151,6 +173,24 @@ public sealed class Plugin : IDalamudPlugin
             case "prompt":
                 this.HandleTextUpdate(rest, value => this.Configuration.SystemPrompt = value, "Prompt");
                 break;
+            case "lang":
+            case "language":
+                this.HandleLanguageCommand(rest);
+                break;
+            case "en":
+            case "english":
+                this.ApplyLanguagePreset(BuiltInPromptPresets.EnglishName);
+                break;
+            case "zh":
+            case "tc":
+            case "chinese":
+                this.ApplyLanguagePreset(BuiltInPromptPresets.TraditionalChineseName);
+                break;
+            case "ja":
+            case "jp":
+            case "japanese":
+                this.ApplyLanguagePreset(BuiltInPromptPresets.JapaneseName);
+                break;
             case "alias":
                 this.HandleAliasCommand(rest);
                 break;
@@ -165,6 +205,14 @@ public sealed class Plugin : IDalamudPlugin
                     value => this.Configuration.CooldownSeconds = value,
                     "CooldownSeconds");
                 break;
+            case "after":
+                this.HandleIntegerUpdate(
+                    rest,
+                    1,
+                    20,
+                    value => this.Configuration.ReplyAfterMessageCount = value,
+                    "ReplyAfterMessageCount");
+                break;
             case "test":
                 if (string.IsNullOrWhiteSpace(rest))
                 {
@@ -172,7 +220,7 @@ public sealed class Plugin : IDalamudPlugin
                     return;
                 }
 
-                _ = Task.Run(() => this.RunManualPromptAsync(rest, this.disposalTokenSource.Token));
+                this.StartBackgroundTask(token => this.RunManualPromptAsync(rest, token));
                 ChatGui.Print("Sent a manual test prompt to the selected provider.", Tag);
                 break;
             case "help":
@@ -194,9 +242,57 @@ public sealed class Plugin : IDalamudPlugin
         this.configWindow.IsOpen = true;
     }
 
+    public void ToggleConfigUi()
+    {
+        this.configWindow.IsOpen = !this.configWindow.IsOpen;
+    }
+
     public void OpenMainUi()
     {
         this.configWindow.IsOpen = true;
+    }
+
+    public void OpenDraftPopup()
+    {
+        this.draftPopupWindow.IsOpen = true;
+    }
+
+    public void ReadSituation()
+    {
+        ChatChannelDefinition? channel;
+        lock (this.historySync)
+        {
+            channel = !string.IsNullOrWhiteSpace(this.lastActiveChannelId) &&
+                      ChatChannelRegistry.TryGetById(this.lastActiveChannelId, out var foundChannel)
+                ? foundChannel
+                : null;
+        }
+
+        if (channel is null)
+        {
+            this.LastDecision = "Read Situation failed: no active watched channel history is available yet.";
+            ChatGui.PrintError("Read Situation failed: no active watched channel history is available yet.", Tag);
+            return;
+        }
+
+        var snapshot = this.GetHistorySnapshot(channel.Id);
+        if (snapshot.Count == 0)
+        {
+            this.LastDecision = $"Read Situation failed: {channel.Label} has no stored chat history yet.";
+            ChatGui.PrintError($"Read Situation failed: {channel.Label} has no stored chat history yet.", Tag);
+            return;
+        }
+
+        this.LastDecision = $"Read Situation requested for {channel.Label}.";
+        this.OpenDraftPopup();
+        this.StartBackgroundTask(token => this.ProcessIncomingTurnAsync(channel, token));
+    }
+
+    public void SwitchLanguagePreset(string presetName)
+    {
+        this.Configuration.SetActivePrompt(presetName);
+        this.Configuration.Save();
+        this.LastDecision = $"Language preset switched to {this.Configuration.ActivePromptPreset}.";
     }
 
     public void RunManualPrompt(string message)
@@ -207,7 +303,7 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        _ = Task.Run(() => this.RunManualPromptAsync(message, this.disposalTokenSource.Token));
+        this.StartBackgroundTask(token => this.RunManualPromptAsync(message, token));
     }
 
     public async Task<string?> TryDetectLmStudioModelAsync()
@@ -231,13 +327,64 @@ public sealed class Plugin : IDalamudPlugin
     public string GetStatusSummary()
     {
         var mode = this.Configuration.SendReplies ? "Reply in source channel" : "Print locally";
+        var approval = this.Configuration.RequireApprovalBeforeReply ? "manual" : "auto";
         var mention = this.Configuration.RequireMention ? "required" : "not required";
         var alias = string.IsNullOrWhiteSpace(this.Configuration.TriggerAlias) ? "(none)" : this.Configuration.TriggerAlias;
         var channels = this.Configuration.WatchedChannelIds.Count == 0
             ? "(none)"
             : this.Configuration.GetWatchedChannelSummary();
 
-        return $"Enabled={this.Configuration.Enabled} | Mode={mode} | Channels={channels} | Mention={mention} | Alias={alias} | Provider={this.Configuration.Provider} | Model={this.Configuration.Model}";
+        return $"Enabled={this.Configuration.Enabled} | Mode={mode} | Approval={approval} | ReplyAfter={this.Configuration.ReplyAfterMessageCount} | Channels={channels} | Mention={mention} | Alias={alias} | Provider={this.Configuration.Provider} | Model={this.Configuration.Model}";
+    }
+
+    public IReadOnlyList<PendingReplyViewModel> GetPendingReplies()
+    {
+        lock (this.pendingReplySync)
+        {
+            return this.pendingReplies
+                .Select(reply => new PendingReplyViewModel(
+                    reply.Id,
+                    reply.Channel.Label,
+                    reply.Channel.Id,
+                    reply.ReplyText,
+                    reply.CreatedAtUtc))
+                .ToArray();
+        }
+    }
+
+    public void ApprovePendingReply(Guid id)
+    {
+        PendingReply? pendingReply = null;
+        lock (this.pendingReplySync)
+        {
+            var index = this.pendingReplies.FindIndex(reply => reply.Id == id);
+            if (index < 0)
+            {
+                return;
+            }
+
+            pendingReply = this.pendingReplies[index];
+            this.pendingReplies.RemoveAt(index);
+        }
+
+        if (pendingReply is null)
+        {
+            return;
+        }
+
+        this.UpdateDraftPopupVisibility();
+        this.StartBackgroundTask(_ => this.PublishReplyAsync(pendingReply.Channel, pendingReply.ReplyText, CancellationToken.None));
+    }
+
+    public void DismissPendingReply(Guid id)
+    {
+        lock (this.pendingReplySync)
+        {
+            this.pendingReplies.RemoveAll(reply => reply.Id == id);
+        }
+
+        this.UpdateDraftPopupVisibility();
+        this.LastDecision = "Pending AI draft was dismissed.";
     }
 
     private void OnChatMessage(XivChatType type, int timestamp, ref SeString sender, ref SeString message, ref bool isHandled)
@@ -281,11 +428,25 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
+        var fingerprint = $"{type}|{senderText}|{messageText}";
+        if (this.lastProcessedFingerprint == fingerprint &&
+            DateTimeOffset.UtcNow - new DateTimeOffset(Interlocked.Read(ref this.lastProcessedFingerprintAtTicks), TimeSpan.Zero) < TimeSpan.FromSeconds(5))
+        {
+            this.LastDecision = "Ignored: duplicate event for the same message.";
+            return;
+        }
+
+        this.lastProcessedFingerprint = fingerprint;
+        Interlocked.Exchange(ref this.lastProcessedFingerprintAtTicks, DateTimeOffset.UtcNow.UtcTicks);
+
         if (this.IsOwnMessage(senderText))
         {
+            this.AddObservedTurn(channel.Id, senderText, messageText);
             this.LastDecision = "Ignored: message looks like it came from your own character.";
             return;
         }
+
+        this.AddObservedTurn(channel.Id, senderText, messageText);
 
         if (this.Configuration.RequireMention && !this.IsTriggered(messageText))
         {
@@ -299,32 +460,31 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        var fingerprint = $"{type}|{senderText}|{messageText}";
-        if (this.lastProcessedFingerprint == fingerprint &&
-            DateTimeOffset.UtcNow - new DateTimeOffset(Interlocked.Read(ref this.lastProcessedFingerprintAtTicks), TimeSpan.Zero) < TimeSpan.FromSeconds(5))
+        var replyAfterCount = Math.Max(1, this.Configuration.ReplyAfterMessageCount);
+        var acceptedCount = this.IncrementPendingReplyCount(channel.Id);
+        if (acceptedCount < replyAfterCount)
         {
-            this.LastDecision = "Ignored: duplicate event for the same message.";
+            this.LastDecision = $"Accepted: stored {acceptedCount}/{replyAfterCount} messages for {channel.Label} before generating a reply.";
             return;
         }
 
-        this.lastProcessedFingerprint = fingerprint;
-        Interlocked.Exchange(ref this.lastProcessedFingerprintAtTicks, DateTimeOffset.UtcNow.UtcTicks);
-
-        var turn = new LmStudioClient.ChatTurn("user", senderText, messageText);
-        this.AddTurn(channel.Id, turn);
+        this.ResetPendingReplyCount(channel.Id);
         this.LastDecision = $"Accepted: sending {channel.Label} context to the selected provider.";
 
-        _ = Task.Run(() => this.ProcessIncomingTurnAsync(channel, this.disposalTokenSource.Token));
+        this.StartBackgroundTask(token => this.ProcessIncomingTurnAsync(channel, token));
     }
 
     private async Task ProcessIncomingTurnAsync(ChatChannelDefinition channel, CancellationToken cancellationToken)
     {
+        var acquiredGate = false;
         if (!await this.requestGate.WaitAsync(0, cancellationToken))
         {
             this.LastDecision = "Ignored: another request is already running.";
             Log.Debug("Skipping chat reply because another AI request is already running.");
             return;
         }
+
+        acquiredGate = true;
 
         try
         {
@@ -348,40 +508,20 @@ public sealed class Plugin : IDalamudPlugin
                 return;
             }
 
+            if (this.Configuration.RequireApprovalBeforeReply)
+            {
+                this.EnqueuePendingReply(channel, sanitizedReply);
+                this.LastDecision = $"Draft ready for {channel.Label}. Use the floating draft window or the config window to approve it.";
+                return;
+            }
+
             if (this.Configuration.ReplyDelayMilliseconds > 0)
             {
                 this.LastDecision = $"Provider replied. Waiting {this.Configuration.ReplyDelayMilliseconds} ms before posting.";
-                await Task.Delay(this.Configuration.ReplyDelayMilliseconds);
+                await Task.Delay(this.Configuration.ReplyDelayMilliseconds, cancellationToken);
             }
 
-            Interlocked.Exchange(ref this.lastReplyAtTicks, DateTimeOffset.UtcNow.UtcTicks);
-            this.AddTurn(channel.Id, new LmStudioClient.ChatTurn("assistant", "AI", sanitizedReply));
-
-            await Framework.RunOnTick(() =>
-            {
-                if (this.Configuration.SendReplies)
-                {
-                    var outgoingReply = SanitizeReplyForGame(sanitizedReply);
-                    var sent = !string.IsNullOrWhiteSpace(outgoingReply) &&
-                               GameChatSender.SendMessage(channel, outgoingReply);
-
-                    if (!sent)
-                    {
-                        this.LastDecision = $"Provider replied, but {channel.Label} dispatch failed. Printed locally instead.";
-                        ChatGui.PrintError($"Failed to dispatch the {channel.Label} chat command. Printing the draft locally instead.", Tag);
-                        ChatGui.Print(sanitizedReply, Tag);
-                    }
-                    else
-                    {
-                        this.LastDecision = $"Provider replied and the message was sent to {channel.Label}.";
-                    }
-                }
-                else
-                {
-                    this.LastDecision = "Provider replied and the draft was printed locally.";
-                    ChatGui.Print(sanitizedReply, Tag);
-                }
-            });
+            await this.PublishReplyAsync(channel, sanitizedReply, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -395,7 +535,17 @@ public sealed class Plugin : IDalamudPlugin
         }
         finally
         {
-            this.requestGate.Release();
+            if (acquiredGate)
+            {
+                try
+                {
+                    this.requestGate.Release();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Plugin disposal can win the race after cancellation.
+                }
+            }
         }
     }
 
@@ -467,6 +617,31 @@ public sealed class Plugin : IDalamudPlugin
         this.HandleTextUpdate(rest, value => this.Configuration.TriggerAlias = value, "TriggerAlias");
     }
 
+    private void HandleLanguageCommand(string rest)
+    {
+        var presetName = rest.Trim().ToLowerInvariant() switch
+        {
+            "en" or "english" => BuiltInPromptPresets.EnglishName,
+            "zh" or "tc" or "traditional chinese" or "chinese" => BuiltInPromptPresets.TraditionalChineseName,
+            "ja" or "jp" or "japanese" => BuiltInPromptPresets.JapaneseName,
+            _ => null,
+        };
+
+        if (presetName is null)
+        {
+            ChatGui.PrintError("Usage: /xivaichat lang en|zh|ja", Tag);
+            return;
+        }
+
+        this.ApplyLanguagePreset(presetName);
+    }
+
+    private void ApplyLanguagePreset(string presetName)
+    {
+        this.SwitchLanguagePreset(presetName);
+        ChatGui.Print($"Language preset set to {this.Configuration.ActivePromptPreset}.", Tag);
+    }
+
     private void HandleBooleanUpdate(string rest, Action<bool> setter, string label)
     {
         if (!TryParseOnOff(rest, out var value))
@@ -508,7 +683,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void PrintHelp()
     {
-        ChatGui.Print("Commands: status | on | off | send on|off | slot <1-8> | endpoint <url> | model <name> | prompt <text> | alias <word|clear> | mention on|off | cooldown <0-600> | test <message>. Use the in-game window to pick multiple channels.", Tag);
+        ChatGui.Print("Commands: status | on | off | send on|off | slot <1-8> | endpoint <url> | model <name> | prompt <text> | lang en|zh|ja | en | zh | ja | alias <word|clear> | mention on|off | cooldown <0-600> | after <1-20> | test <message>. Use the in-game window to pick multiple channels.", Tag);
     }
 
     private void PrintStatus()
@@ -518,6 +693,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void DrawUi()
     {
+        this.draftPopupWindow.IsOpen = this.Configuration.ShowDraftPopup || this.draftPopupWindow.IsOpen;
         this.WindowSystem.Draw();
     }
 
@@ -553,6 +729,16 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private void AddObservedTurn(string channelId, string senderText, string messageText)
+    {
+        var turn = new LmStudioClient.ChatTurn("user", senderText, messageText);
+        this.AddTurn(channelId, turn);
+        lock (this.historySync)
+        {
+            this.lastActiveChannelId = channelId;
+        }
+    }
+
     private bool IsOwnMessage(string sender)
     {
         if (!PlayerState.IsLoaded || string.IsNullOrWhiteSpace(PlayerState.CharacterName))
@@ -560,13 +746,13 @@ public sealed class Plugin : IDalamudPlugin
             return false;
         }
 
-        return sender.Contains(PlayerState.CharacterName, StringComparison.OrdinalIgnoreCase);
+        return StartsWithName(sender, PlayerState.CharacterName);
     }
 
     private bool IsTriggered(string message)
     {
         if (!string.IsNullOrWhiteSpace(this.Configuration.TriggerAlias) &&
-            message.Contains(this.Configuration.TriggerAlias, StringComparison.OrdinalIgnoreCase))
+            ContainsDelimitedToken(message, this.Configuration.TriggerAlias))
         {
             return true;
         }
@@ -577,6 +763,125 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         return false;
+    }
+
+    private void StartBackgroundTask(Func<CancellationToken, Task> work)
+    {
+        Task? task = null;
+        task = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    await work(this.disposalTokenSource.Token);
+                }
+                finally
+                {
+                    lock (this.backgroundTaskSync)
+                    {
+                        if (task is not null)
+                        {
+                            this.backgroundTasks.Remove(task);
+                        }
+                    }
+                }
+            },
+            CancellationToken.None);
+
+        lock (this.backgroundTaskSync)
+        {
+            this.backgroundTasks.Add(task);
+        }
+    }
+
+    private void WaitForBackgroundTasks()
+    {
+        Task[] snapshot;
+        lock (this.backgroundTaskSync)
+        {
+            snapshot = this.backgroundTasks.ToArray();
+        }
+
+        if (snapshot.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            Task.WaitAll(snapshot, TimeSpan.FromSeconds(2));
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException))
+        {
+            // Expected during plugin unload.
+        }
+    }
+
+    private int IncrementPendingReplyCount(string channelId)
+    {
+        lock (this.historySync)
+        {
+            this.pendingReplyCountsByChannel.TryGetValue(channelId, out var currentCount);
+            currentCount++;
+            this.pendingReplyCountsByChannel[channelId] = currentCount;
+            return currentCount;
+        }
+    }
+
+    private void ResetPendingReplyCount(string channelId)
+    {
+        lock (this.historySync)
+        {
+            this.pendingReplyCountsByChannel[channelId] = 0;
+        }
+    }
+
+    private static bool StartsWithName(string text, string name)
+    {
+        if (!text.StartsWith(name, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return IsTokenBoundary(text, name.Length);
+    }
+
+    private static bool ContainsDelimitedToken(string text, string token)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(token))
+        {
+            return false;
+        }
+
+        var searchStart = 0;
+        while (searchStart < text.Length)
+        {
+            var index = text.IndexOf(token, searchStart, StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            if (IsTokenBoundary(text, index - 1) &&
+                IsTokenBoundary(text, index + token.Length))
+            {
+                return true;
+            }
+
+            searchStart = index + token.Length;
+        }
+
+        return false;
+    }
+
+    private static bool IsTokenBoundary(string text, int index)
+    {
+        if (index < 0 || index >= text.Length)
+        {
+            return true;
+        }
+
+        return !char.IsLetterOrDigit(text[index]);
     }
 
     private static bool TryParseOnOff(string value, out bool parsed)
@@ -786,4 +1091,62 @@ public sealed class Plugin : IDalamudPlugin
 
         return builder.ToString().Trim();
     }
+
+    private void EnqueuePendingReply(ChatChannelDefinition channel, string replyText)
+    {
+        lock (this.pendingReplySync)
+        {
+            this.pendingReplies.Add(new PendingReply(Guid.NewGuid(), channel, replyText, DateTimeOffset.UtcNow));
+        }
+
+        this.UpdateDraftPopupVisibility(openWindow: true);
+    }
+
+    private void UpdateDraftPopupVisibility(bool openWindow = false)
+    {
+        if (openWindow || this.Configuration.ShowDraftPopup)
+        {
+            this.draftPopupWindow.IsOpen = true;
+        }
+    }
+
+    private async Task PublishReplyAsync(ChatChannelDefinition channel, string sanitizedReply, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Exchange(ref this.lastReplyAtTicks, DateTimeOffset.UtcNow.UtcTicks);
+        this.AddTurn(channel.Id, new LmStudioClient.ChatTurn("assistant", "AI", sanitizedReply));
+
+        await Framework.RunOnTick(() =>
+        {
+            if (this.Configuration.SendReplies)
+            {
+                var outgoingReply = SanitizeReplyForGame(sanitizedReply);
+                var sent = !string.IsNullOrWhiteSpace(outgoingReply) &&
+                           GameChatSender.SendMessage(channel, outgoingReply);
+
+                if (!sent)
+                {
+                    this.LastDecision = $"Provider replied, but {channel.Label} dispatch failed. Printed locally instead.";
+                    ChatGui.PrintError($"Failed to dispatch the {channel.Label} chat command. Printing the draft locally instead.", Tag);
+                    ChatGui.Print(sanitizedReply, Tag);
+                }
+                else
+                {
+                    this.LastDecision = $"Provider replied and the message was sent to {channel.Label}.";
+                }
+            }
+            else
+            {
+                this.LastDecision = "Provider replied and the draft was printed locally.";
+                ChatGui.Print(sanitizedReply, Tag);
+            }
+        });
+    }
+
+    public sealed record PendingReplyViewModel(
+        Guid Id,
+        string ChannelLabel,
+        string ChannelId,
+        string ReplyText,
+        DateTimeOffset CreatedAtUtc);
 }

@@ -1,6 +1,7 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Components;
+using Dalamud.Interface;
 using Dalamud.Interface.Windowing;
 
 namespace XivAiChat;
@@ -36,7 +37,6 @@ public sealed class ConfigWindow : Window, IDisposable
         : base("XIV AI Chat###XivAiChatConfig")
     {
         this.plugin = plugin;
-        this.Flags = ImGuiWindowFlags.NoCollapse;
         this.SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(700, 560),
@@ -81,11 +81,34 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.SameLine();
         ImGuiComponents.HelpMarker("Leave this off first so the plugin only prints drafts locally.");
 
+        var requireApproval = configuration.RequireApprovalBeforeReply;
+        if (ImGui.Checkbox("Require OK before replying", ref requireApproval))
+        {
+            configuration.RequireApprovalBeforeReply = requireApproval;
+            this.plugin.SaveConfiguration();
+        }
+
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker("When enabled, the plugin prepares a draft but does not print or send it until you approve it below.");
+
         var requireMention = configuration.RequireMention;
         if (ImGui.Checkbox("Require mention or alias", ref requireMention))
         {
             configuration.RequireMention = requireMention;
             this.plugin.SaveConfiguration();
+        }
+
+        ImGui.SameLine();
+        var showDraftPopup = this.plugin.Configuration.ShowDraftPopup;
+        if (ImGui.Checkbox("Show Reply Drafts", ref showDraftPopup))
+        {
+            this.plugin.Configuration.ShowDraftPopup = showDraftPopup;
+            this.plugin.SaveConfiguration();
+
+            if (showDraftPopup)
+            {
+                this.plugin.OpenDraftPopup();
+            }
         }
 
         ImGui.TextDisabled(this.plugin.GetStatusSummary());
@@ -100,6 +123,8 @@ public sealed class ConfigWindow : Window, IDisposable
         DrawBehaviorSection(configuration);
         ImGui.Spacing();
         DrawPromptSection(configuration);
+        ImGui.Spacing();
+        DrawPendingRepliesSection();
         ImGui.Spacing();
         DrawQuickTestSection();
         ImGui.Spacing();
@@ -264,6 +289,16 @@ public sealed class ConfigWindow : Window, IDisposable
             this.plugin.SaveConfiguration();
         }
 
+        var replyAfterCount = configuration.ReplyAfterMessageCount;
+        if (ImGui.SliderInt("Reply after chats", ref replyAfterCount, 1, 20))
+        {
+            configuration.ReplyAfterMessageCount = replyAfterCount;
+            this.plugin.SaveConfiguration();
+        }
+
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker("How many accepted chat messages in the same watched channel should accumulate before the AI generates one reply.");
+
         var historyCount = configuration.MaxHistoryMessages;
         if (ImGui.SliderInt("History lines", ref historyCount, 1, 20))
         {
@@ -310,6 +345,35 @@ public sealed class ConfigWindow : Window, IDisposable
     {
         ImGui.Text("Prompt Presets");
 
+        ImGui.Text("Quick language switch");
+        if (ImGui.Button("English"))
+        {
+            configuration.SetActivePrompt(BuiltInPromptPresets.EnglishName);
+            this.systemPromptBuffer = configuration.SystemPrompt;
+            this.presetNameBuffer = configuration.ActivePromptPreset;
+            this.plugin.SaveConfiguration();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("繁中"))
+        {
+            configuration.SetActivePrompt(BuiltInPromptPresets.TraditionalChineseName);
+            this.systemPromptBuffer = configuration.SystemPrompt;
+            this.presetNameBuffer = configuration.ActivePromptPreset;
+            this.plugin.SaveConfiguration();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("日本語"))
+        {
+            configuration.SetActivePrompt(BuiltInPromptPresets.JapaneseName);
+            this.systemPromptBuffer = configuration.SystemPrompt;
+            this.presetNameBuffer = configuration.ActivePromptPreset;
+            this.plugin.SaveConfiguration();
+        }
+
+        var activePreset = configuration.GetActivePrompt();
+        var activeBuiltIn = activePreset is not null && BuiltInPromptPresets.IsBuiltInName(activePreset.Name);
         var presetNames = configuration.PromptPresets.Select(preset => preset.Name).ToArray();
         var activeIndex = Array.FindIndex(
             presetNames,
@@ -332,11 +396,18 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
+        if (activeBuiltIn)
+        {
+            ImGui.BeginDisabled();
+        }
+
         if (ImGui.Button("Save To Preset"))
         {
             configuration.SystemPrompt = this.systemPromptBuffer.Trim();
-            configuration.SaveCurrentPromptToActivePreset();
-            this.plugin.SaveConfiguration();
+            if (configuration.SaveCurrentPromptToActivePreset())
+            {
+                this.plugin.SaveConfiguration();
+            }
         }
 
         ImGui.SameLine();
@@ -350,6 +421,17 @@ public sealed class ConfigWindow : Window, IDisposable
             }
         }
 
+        if (activeBuiltIn)
+        {
+            ImGui.EndDisabled();
+        }
+
+        if (activeBuiltIn && activePreset is not null)
+        {
+            this.systemPromptBuffer = activePreset.Prompt;
+            ImGui.TextWrapped("Built-in presets are read-only. Enter a new preset name below if you want to clone and edit this prompt.");
+        }
+
         if (ImGui.InputTextWithHint("Preset name", "New preset name", ref this.presetNameBuffer, 64))
         {
         }
@@ -358,15 +440,23 @@ public sealed class ConfigWindow : Window, IDisposable
         if (ImGui.Button("Create / Overwrite"))
         {
             configuration.SystemPrompt = this.systemPromptBuffer.Trim();
-            configuration.UpsertPromptPreset(this.presetNameBuffer, configuration.SystemPrompt);
-            this.plugin.SaveConfiguration();
+            if (configuration.UpsertPromptPreset(this.presetNameBuffer, configuration.SystemPrompt))
+            {
+                this.plugin.SaveConfiguration();
+            }
         }
 
         ImGui.Text("System prompt");
-        if (ImGui.InputTextMultiline("##systemPrompt", ref this.systemPromptBuffer, 12000, new Vector2(-1, 180)))
+        var promptFlags = activeBuiltIn
+            ? ImGuiInputTextFlags.ReadOnly
+            : ImGuiInputTextFlags.None;
+        if (ImGui.InputTextMultiline("##systemPrompt", ref this.systemPromptBuffer, 12000, new Vector2(-1, 180), promptFlags))
         {
-            configuration.SystemPrompt = this.systemPromptBuffer;
-            this.plugin.SaveConfiguration();
+            if (!activeBuiltIn)
+            {
+                configuration.SystemPrompt = this.systemPromptBuffer;
+                this.plugin.SaveConfiguration();
+            }
         }
     }
 
@@ -388,9 +478,51 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
+        if (ImGui.Button("Read Situation"))
+        {
+            this.plugin.ReadSituation();
+        }
+
+        ImGui.SameLine();
         if (ImGui.Button("Close"))
         {
             this.IsOpen = false;
+        }
+    }
+
+    private void DrawPendingRepliesSection()
+    {
+        ImGui.Separator();
+        ImGui.Text("Pending Replies");
+
+        var pendingReplies = this.plugin.GetPendingReplies();
+        if (pendingReplies.Count == 0)
+        {
+            ImGui.TextDisabled("No drafts waiting for approval.");
+            return;
+        }
+
+        ImGui.TextWrapped("AI drafts stay here until you press OK. They will use the current send mode when approved.");
+
+        foreach (var pendingReply in pendingReplies.OrderByDescending(reply => reply.CreatedAtUtc))
+        {
+            ImGui.PushID(pendingReply.Id.ToString());
+            ImGui.Separator();
+            ImGui.TextDisabled($"{pendingReply.ChannelLabel} • {pendingReply.CreatedAtUtc.ToLocalTime():HH:mm:ss}");
+            ImGui.TextWrapped(pendingReply.ReplyText);
+
+            if (ImGui.Button("OK"))
+            {
+                this.plugin.ApprovePendingReply(pendingReply.Id);
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Dismiss"))
+            {
+                this.plugin.DismissPendingReply(pendingReply.Id);
+            }
+
+            ImGui.PopID();
         }
     }
 

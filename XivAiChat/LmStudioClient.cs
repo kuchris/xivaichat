@@ -142,9 +142,46 @@ public sealed class LmStudioClient : IDisposable
         bool isGemini,
         string? searchContext = null)
     {
+        var messages = BuildOpenAiMessages(configuration, history, searchContext);
+        var body = await this.SendOpenAiCompatibleRequestAsync(
+            configuration,
+            messages,
+            cancellationToken,
+            isGemini);
+
+        var content = ExtractOpenAiReplyText(body);
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            messages.Add(new OpenAiChatMessage(
+                "system",
+                "Your previous response was empty. Return exactly one short visible in-game chat line now. Do not return an empty string."));
+
+            body = await this.SendOpenAiCompatibleRequestAsync(
+                configuration,
+                messages,
+                cancellationToken,
+                isGemini);
+
+            content = ExtractOpenAiReplyText(body);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                var snippet = body.Length <= 1200 ? body : $"{body[..1200]}...";
+                throw new InvalidOperationException($"AI provider returned no reply text. Raw response: {snippet}");
+            }
+        }
+
+        return content;
+    }
+
+    private async Task<string> SendOpenAiCompatibleRequestAsync(
+        Configuration configuration,
+        IReadOnlyList<OpenAiChatMessage> messages,
+        CancellationToken cancellationToken,
+        bool isGemini)
+    {
         var request = new OpenAiChatCompletionsRequest(
             configuration.Model,
-            BuildOpenAiMessages(configuration, history, searchContext),
+            messages,
             configuration.Temperature,
             configuration.MaxTokens,
             GetReasoningEffort(configuration, isGemini));
@@ -162,15 +199,7 @@ public sealed class LmStudioClient : IDisposable
         using var response = await this.httpClient.SendAsync(httpRequest, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         response.EnsureSuccessStatusCode();
-
-        var content = ExtractOpenAiReplyText(body);
-        if (string.IsNullOrWhiteSpace(content))
-        {
-            var snippet = body.Length <= 1200 ? body : $"{body[..1200]}...";
-            throw new InvalidOperationException($"AI provider returned no reply text. Raw response: {snippet}");
-        }
-
-        return content;
+        return body;
     }
 
     private async Task<string> CreateGeminiNativeReplyAsync(
@@ -423,11 +452,6 @@ public sealed class LmStudioClient : IDisposable
         if (!isGemini)
         {
             return null;
-        }
-
-        if (!configuration.UseReasoning)
-        {
-            return "none";
         }
 
         return string.IsNullOrWhiteSpace(configuration.ReasoningEffort)
