@@ -46,9 +46,11 @@ Then:
 5. Open `/xlplugins`
 6. Find `XIV AI Chat` and install it
 
-The packaged plugin zip is published from:
+The custom repo manifest is published from:
 
-`https://raw.githubusercontent.com/kuchris/xivaichat/main/dist/XivAiChat.zip`
+`https://raw.githubusercontent.com/kuchris/xivaichat/main/repo.json`
+
+The plugin zip is published as a GitHub Release asset.
 
 ## Install As A Dev Plugin
 
@@ -196,6 +198,26 @@ To package the plugin zip and refresh `repo.json` metadata after a successful bu
 ```powershell
 .\tools\pack.ps1
 ```
+
+## Publish Update
+
+This repo uses a hybrid distribution flow:
+
+- `repo.json` is served from `main`
+- `XivAiChat.zip` is served from GitHub Releases
+
+Release steps:
+
+1. Bump the version in `XivAiChat/XivAiChat.csproj`
+2. Build the plugin
+3. Run `.\tools\pack.ps1`
+4. Commit and push the updated source, `repo.json`, and `dist/XivAiChat.zip`
+5. Create a GitHub Release whose tag exactly matches the assembly version, for example `0.1.2.0`
+6. Upload `dist/XivAiChat.zip` as the release asset named `XivAiChat.zip`
+
+`tools\pack.ps1` automatically rewrites the download links in `repo.json` to:
+
+`https://github.com/kuchris/xivaichat/releases/download/<version>/XivAiChat.zip`
 
 ## Project Layout
 

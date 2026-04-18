@@ -38,7 +38,11 @@ if (-not (Test-Path $repoJsonPath)) {
 }
 
 $pluginManifest = Get-Content -Path $manifestPath -Raw | ConvertFrom-Json
-$repoEntries = @(Get-Content -Path $repoJsonPath -Raw | ConvertFrom-Json)
+$repoEntries = Get-Content -Path $repoJsonPath -Raw | ConvertFrom-Json
+
+if (-not ($repoEntries -is [System.Array])) {
+    $repoEntries = @($repoEntries)
+}
 
 if ($repoEntries.Length -lt 1) {
     throw "repo.json does not contain any plugin entries."
@@ -49,6 +53,11 @@ $repoEntries[0].TestingAssemblyVersion = $pluginManifest.AssemblyVersion
 $repoEntries[0].DalamudApiLevel = $pluginManifest.DalamudApiLevel
 $repoEntries[0].TestingDalamudApiLevel = $pluginManifest.DalamudApiLevel
 $repoEntries[0].LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$releaseTag = $pluginManifest.AssemblyVersion
+$releaseZipUrl = "https://github.com/kuchris/xivaichat/releases/download/$releaseTag/XivAiChat.zip"
+$repoEntries[0].DownloadLinkInstall = $releaseZipUrl
+$repoEntries[0].DownloadLinkUpdate = $releaseZipUrl
+$repoEntries[0].DownloadLinkTesting = $releaseZipUrl
 
 $repoJsonContent = ConvertTo-Json -InputObject @($repoEntries) -Depth 10
 [System.IO.File]::WriteAllText(
@@ -59,3 +68,4 @@ $repoJsonContent = ConvertTo-Json -InputObject @($repoEntries) -Depth 10
 Compress-Archive -Path $files -DestinationPath $zipPath -Force
 Write-Host "Created $zipPath"
 Write-Host "Updated $repoJsonPath to version $($pluginManifest.AssemblyVersion)"
+Write-Host "Release asset URL set to $releaseZipUrl"
