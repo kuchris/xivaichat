@@ -1,0 +1,40 @@
+name: Build
+
+on:
+  push:
+    branches-ignore:
+      - main
+    tags-ignore:
+      - '*'
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore XivAiChat.sln
+
+      - name: Build
+        run: dotnet build XivAiChat.sln --configuration Debug --no-restore
+
+      - name: Package
+        shell: pwsh
+        run: .\tools\pack.ps1
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XivAiChat
+          path: |
+            dist/XivAiChat.zip
+            repo.json

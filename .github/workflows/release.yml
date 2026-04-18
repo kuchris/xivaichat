@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Validate Tag Matches Project Version
+        shell: pwsh
+        run: |
+          [xml]$csproj = Get-Content XivAiChat\XivAiChat.csproj
+          $projectVersion = $csproj.Project.PropertyGroup.Version
+          $tagVersion = "${{ github.ref_name }}"
+          if ($projectVersion -ne $tagVersion) {
+            throw "Tag '$tagVersion' does not match project version '$projectVersion'."
+          }
+
+      - name: Restore
+        run: dotnet restore XivAiChat.sln
+
+      - name: Build
+        run: dotnet build XivAiChat.sln --configuration Debug --no-restore
+
+      - name: Package
+        shell: pwsh
+        run: .\tools\pack.ps1
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/XivAiChat.zip
+          generate_release_notes: true
+
+      - name: Update repo.json on main
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add repo.json
+          if (git diff --cached --quiet) {
+            Write-Host "repo.json is already up to date."
+            exit 0
+          }
+
+          git commit -m "Update repo.json for ${{ github.ref_name }}"
+          git push origin HEAD:main

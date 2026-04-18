@@ -206,14 +206,26 @@ This repo uses a hybrid distribution flow:
 - `repo.json` is served from `main`
 - `XivAiChat.zip` is served from GitHub Releases
 
+GitHub Actions handles the release packaging and upload.
+
 Release steps:
 
 1. Bump the version in `XivAiChat/XivAiChat.csproj`
-2. Build the plugin
-3. Run `.\tools\pack.ps1`
-4. Commit and push the updated source, `repo.json`, and `dist/XivAiChat.zip`
-5. Create a GitHub Release whose tag exactly matches the assembly version, for example `0.1.2.0`
-6. Upload `dist/XivAiChat.zip` as the release asset named `XivAiChat.zip`
+2. Commit and push the version change to `main`
+3. Create and push a tag that exactly matches the version, for example `0.1.2.0`
+
+```powershell
+git tag 0.1.2.0
+git push origin 0.1.2.0
+```
+
+The release workflow will then:
+
+- build the plugin
+- run `.\tools\pack.ps1`
+- create a GitHub Release for the tag
+- upload `dist/XivAiChat.zip`
+- commit the updated `repo.json` back to `main`
 
 `tools\pack.ps1` automatically rewrites the download links in `repo.json` to:
 
