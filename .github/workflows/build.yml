@@ -21,6 +21,20 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Prepare Dalamud
+        shell: pwsh
+        run: |
+          $dalamudPath = Join-Path $env:APPDATA 'XIVLauncher\addon\Hooks\dev'
+          $zipPath = Join-Path $env:RUNNER_TEMP 'dalamud.zip'
+          if (Test-Path $dalamudPath) {
+            Remove-Item -LiteralPath $dalamudPath -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Force -Path $dalamudPath | Out-Null
+          Invoke-WebRequest 'https://goatcorp.github.io/dalamud-distrib/latest.zip' -OutFile $zipPath
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $dalamudPath -Force
+          "DALAMUD_HOME=$dalamudPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Restore
         run: dotnet restore XivAiChat.sln
 
