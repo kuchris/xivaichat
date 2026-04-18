@@ -38,9 +38,9 @@ if (-not (Test-Path $repoJsonPath)) {
 }
 
 $pluginManifest = Get-Content -Path $manifestPath -Raw | ConvertFrom-Json
-$repoEntries = Get-Content -Path $repoJsonPath -Raw | ConvertFrom-Json
+$repoEntries = @(Get-Content -Path $repoJsonPath -Raw | ConvertFrom-Json)
 
-if ($repoEntries.Count -lt 1) {
+if ($repoEntries.Length -lt 1) {
     throw "repo.json does not contain any plugin entries."
 }
 
@@ -50,7 +50,11 @@ $repoEntries[0].DalamudApiLevel = $pluginManifest.DalamudApiLevel
 $repoEntries[0].TestingDalamudApiLevel = $pluginManifest.DalamudApiLevel
 $repoEntries[0].LastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 
-@($repoEntries) | ConvertTo-Json -Depth 10 | Set-Content -Path $repoJsonPath -Encoding utf8
+$repoJsonContent = ConvertTo-Json -InputObject @($repoEntries) -Depth 10
+[System.IO.File]::WriteAllText(
+    $repoJsonPath,
+    $repoJsonContent,
+    [System.Text.UTF8Encoding]::new($false))
 
 Compress-Archive -Path $files -DestinationPath $zipPath -Force
 Write-Host "Created $zipPath"
