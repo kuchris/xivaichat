@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text;
 using Dalamud.Game.Command;
+using Dalamud.Game.Chat;
 using Dalamud.Game.Text;
-using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
@@ -387,14 +387,14 @@ public sealed class Plugin : IDalamudPlugin
         this.LastDecision = "Pending AI draft was dismissed.";
     }
 
-    private void OnChatMessage(XivChatType type, int timestamp, ref SeString sender, ref SeString message, ref bool isHandled)
+    private void OnChatMessage(IHandleableChatMessage message)
     {
-        this.HandleIncomingChat("ChatMessage", type, sender.TextValue.Trim(), message.TextValue.Trim());
+        this.HandleIncomingChat("ChatMessage", message.LogKind, message.Sender.TextValue.Trim(), message.Message.TextValue.Trim());
     }
 
-    private void OnChatMessageUnhandled(XivChatType type, int timestamp, SeString sender, SeString message)
+    private void OnChatMessageUnhandled(IChatMessage message)
     {
-        this.HandleIncomingChat("ChatMessageUnhandled", type, sender.TextValue.Trim(), message.TextValue.Trim());
+        this.HandleIncomingChat("ChatMessageUnhandled", message.LogKind, message.Sender.TextValue.Trim(), message.Message.TextValue.Trim());
     }
 
     private void HandleIncomingChat(string source, XivChatType type, string senderText, string messageText)
