@@ -1,8 +1,10 @@
 using System.Globalization;
+using System.Linq.Expressions;
+using System.Reflection;
 using System.Text;
 using Dalamud.Game.Command;
-using Dalamud.Game.Chat;
 using Dalamud.Game.Text;
+using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
@@ -48,6 +50,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly List<Task> backgroundTasks = [];
     private readonly List<PendingReply> pendingReplies = [];
     private readonly Dictionary<string, int> pendingReplyCountsByChannel = new(StringComparer.Ordinal);
+    private readonly Delegate? chatMessageHandler;
+    private readonly Delegate? chatMessageUnhandledHandler;
     private string? lastActiveChannelId;
     private string? lastProcessedFingerprint;
 
@@ -76,8 +80,8 @@ public sealed class Plugin : IDalamudPlugin
                 HelpMessage = "Open the XIV AI Chat window, or use subcommands like status / test.",
             });
 
-        ChatGui.ChatMessage += this.OnChatMessage;
-        ChatGui.ChatMessageUnhandled += this.OnChatMessageUnhandled;
+        this.chatMessageHandler = this.SubscribeChatEvent("ChatMessage");
+        this.chatMessageUnhandledHandler = this.SubscribeChatEvent("ChatMessageUnhandled");
         PluginInterface.UiBuilder.Draw += this.DrawUi;
         PluginInterface.UiBuilder.OpenConfigUi += this.OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi += this.OpenMainUi;
@@ -114,8 +118,8 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
-        ChatGui.ChatMessage -= this.OnChatMessage;
-        ChatGui.ChatMessageUnhandled -= this.OnChatMessageUnhandled;
+        this.UnsubscribeChatEvent("ChatMessage", this.chatMessageHandler);
+        this.UnsubscribeChatEvent("ChatMessageUnhandled", this.chatMessageUnhandledHandler);
         PluginInterface.UiBuilder.Draw -= this.DrawUi;
         PluginInterface.UiBuilder.OpenConfigUi -= this.OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= this.OpenMainUi;
@@ -387,14 +391,86 @@ public sealed class Plugin : IDalamudPlugin
         this.LastDecision = "Pending AI draft was dismissed.";
     }
 
-    private void OnChatMessage(IHandleableChatMessage message)
+    private Delegate SubscribeChatEvent(string eventName)
     {
-        this.HandleIncomingChat("ChatMessage", message.LogKind, message.Sender.TextValue.Trim(), message.Message.TextValue.Trim());
+        var eventInfo = typeof(IChatGui).GetEvent(eventName, BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingMemberException(typeof(IChatGui).FullName, eventName);
+        var handler = this.CreateChatEventHandler(eventName, eventInfo.EventHandlerType
+            ?? throw new InvalidOperationException($"Event {eventName} is missing a handler type."));
+        eventInfo.AddEventHandler(ChatGui, handler);
+        return handler;
     }
 
-    private void OnChatMessageUnhandled(IChatMessage message)
+    private void UnsubscribeChatEvent(string eventName, Delegate? handler)
     {
-        this.HandleIncomingChat("ChatMessageUnhandled", message.LogKind, message.Sender.TextValue.Trim(), message.Message.TextValue.Trim());
+        if (handler is null)
+        {
+            return;
+        }
+
+        var eventInfo = typeof(IChatGui).GetEvent(eventName, BindingFlags.Instance | BindingFlags.Public);
+        eventInfo?.RemoveEventHandler(ChatGui, handler);
+    }
+
+    private Delegate CreateChatEventHandler(string eventName, Type handlerType)
+    {
+        var invokeMethod = handlerType.GetMethod("Invoke")
+            ?? throw new InvalidOperationException($"Event handler type {handlerType.FullName} does not define Invoke.");
+        var parameters = invokeMethod.GetParameters();
+
+        return parameters.Length switch
+        {
+            5 when string.Equals(eventName, "ChatMessage", StringComparison.Ordinal)
+                => Delegate.CreateDelegate(handlerType, this, nameof(OnChatMessageLegacy)),
+            4 when string.Equals(eventName, "ChatMessageUnhandled", StringComparison.Ordinal)
+                => Delegate.CreateDelegate(handlerType, this, nameof(OnChatMessageUnhandledLegacy)),
+            1 => this.CreateSingleMessageHandler(handlerType, eventName),
+            _ => throw new NotSupportedException($"Unsupported {eventName} handler signature with {parameters.Length} parameters."),
+        };
+    }
+
+    private Delegate CreateSingleMessageHandler(Type handlerType, string source)
+    {
+        var invokeMethod = handlerType.GetMethod("Invoke")
+            ?? throw new InvalidOperationException($"Event handler type {handlerType.FullName} does not define Invoke.");
+        var parameter = Expression.Parameter(invokeMethod.GetParameters()[0].ParameterType, "message");
+        var body = Expression.Call(
+            Expression.Constant(this),
+            typeof(Plugin).GetMethod(nameof(OnSingleMessageEvent), BindingFlags.Instance | BindingFlags.NonPublic)!,
+            Expression.Constant(source),
+            Expression.Convert(parameter, typeof(object)));
+
+        return Expression.Lambda(handlerType, body, parameter).Compile();
+    }
+
+    private void OnChatMessageLegacy(XivChatType type, int timestamp, ref SeString sender, ref SeString message, ref bool isHandled)
+    {
+        this.HandleIncomingChat("ChatMessage", type, sender.TextValue.Trim(), message.TextValue.Trim());
+    }
+
+    private void OnChatMessageUnhandledLegacy(XivChatType type, int timestamp, SeString sender, SeString message)
+    {
+        this.HandleIncomingChat("ChatMessageUnhandled", type, sender.TextValue.Trim(), message.TextValue.Trim());
+    }
+
+    private void OnSingleMessageEvent(string source, object message)
+    {
+        var messageType = message.GetType();
+        var logKind = messageType.GetProperty("LogKind")?.GetValue(message);
+        var sender = messageType.GetProperty("Sender")?.GetValue(message);
+        var text = messageType.GetProperty("Message")?.GetValue(message);
+
+        if (logKind is not XivChatType type)
+        {
+            return;
+        }
+
+        this.HandleIncomingChat(source, type, ExtractTextValue(sender), ExtractTextValue(text));
+    }
+
+    private static string ExtractTextValue(object? seString)
+    {
+        return seString?.GetType().GetProperty("TextValue")?.GetValue(seString) as string ?? string.Empty;
     }
 
     private void HandleIncomingChat(string source, XivChatType type, string senderText, string messageText)
