@@ -17,11 +17,7 @@ public sealed class DraftPopupWindow : Window
         this.Flags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
         this.Size = new Vector2(420f, 240f);
         this.SizeCondition = ImGuiCond.FirstUseEver;
-        this.SizeConstraints = new WindowSizeConstraints
-        {
-            MinimumSize = new Vector2(320f, 180f),
-            MaximumSize = new Vector2(620f, 520f),
-        };
+        WindowCompat.ApplySizeConstraints(this, new Vector2(320f, 180f), new Vector2(620f, 520f));
 
         if (plugin.Configuration.DraftPopupPositionX >= 0f &&
             plugin.Configuration.DraftPopupPositionY >= 0f)

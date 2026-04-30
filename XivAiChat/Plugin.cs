@@ -70,8 +70,8 @@ public sealed class Plugin : IDalamudPlugin
         this.configWindow = new ConfigWindow(this);
         this.draftPopupWindow = new DraftPopupWindow(this);
 
-        this.WindowSystem.AddWindow(this.configWindow);
-        this.WindowSystem.AddWindow(this.draftPopupWindow);
+        AddWindowCompat(this.WindowSystem, this.configWindow);
+        AddWindowCompat(this.WindowSystem, this.draftPopupWindow);
 
         CommandManager.AddHandler(
             CommandName,
@@ -471,6 +471,25 @@ public sealed class Plugin : IDalamudPlugin
     private static string ExtractTextValue(object? seString)
     {
         return seString?.GetType().GetProperty("TextValue")?.GetValue(seString) as string ?? string.Empty;
+    }
+
+    private static void AddWindowCompat(WindowSystem windowSystem, object window)
+    {
+        var addWindowMethod = windowSystem.GetType()
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => string.Equals(method.Name, "AddWindow", StringComparison.Ordinal))
+            .FirstOrDefault(method =>
+            {
+                var parameters = method.GetParameters();
+                return parameters.Length == 1 && parameters[0].ParameterType.IsInstanceOfType(window);
+            });
+
+        if (addWindowMethod is null)
+        {
+            throw new MissingMethodException(windowSystem.GetType().FullName, "AddWindow");
+        }
+
+        addWindowMethod.Invoke(windowSystem, [window]);
     }
 
     private void HandleIncomingChat(string source, XivChatType type, string senderText, string messageText)

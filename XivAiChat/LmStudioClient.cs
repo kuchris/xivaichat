@@ -198,7 +198,12 @@ public sealed class LmStudioClient : IDisposable
 
         using var response = await this.httpClient.SendAsync(httpRequest, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var snippet = body.Length <= 1200 ? body : $"{body[..1200]}...";
+            throw new InvalidOperationException($"AI provider request failed: {(int)response.StatusCode} {response.ReasonPhrase}. Endpoint={configuration.Endpoint}. Model={configuration.Model}. Body={snippet}");
+        }
+
         return body;
     }
 
@@ -1123,7 +1128,7 @@ public sealed class LmStudioClient : IDisposable
             RequireMention = configuration.RequireMention,
             TriggerAlias = configuration.TriggerAlias,
             Provider = configuration.Provider,
-            Endpoint = configuration.Endpoint,
+            Endpoint = NormalizeEndpoint(configuration.Provider, configuration.Endpoint),
             Model = NormalizeModelName(configuration.Provider, configuration.Model),
             ApiKey = configuration.ApiKey,
             SystemPrompt = configuration.SystemPrompt,
@@ -1147,6 +1152,19 @@ public sealed class LmStudioClient : IDisposable
 
     private static string NormalizeModelName(string provider, string model)
     {
+        if (string.Equals(provider, AiProvider.NvidiaNim, StringComparison.Ordinal))
+        {
+            var normalizedModel = model.Trim().StartsWith("nvidia_nim/", StringComparison.OrdinalIgnoreCase)
+                ? model.Trim()["nvidia_nim/".Length..]
+                : model.Trim();
+
+            return normalizedModel switch
+            {
+                "z-ai/glm-4.7" => "z-ai/glm4.7",
+                _ => normalizedModel,
+            };
+        }
+
         if (!string.Equals(provider, AiProvider.Gemini, StringComparison.Ordinal))
         {
             return model;
@@ -1157,6 +1175,36 @@ public sealed class LmStudioClient : IDisposable
             "gemini-3.1-flash-lite" => "gemini-3.1-flash-lite-preview",
             _ => model,
         };
+    }
+
+    private static string NormalizeEndpoint(string provider, string endpoint)
+    {
+        if (!string.Equals(provider, AiProvider.NvidiaNim, StringComparison.Ordinal) ||
+            !Uri.TryCreate(endpoint.Trim(), UriKind.Absolute, out var uri))
+        {
+            return endpoint;
+        }
+
+        var normalizedPath = uri.AbsolutePath.TrimEnd('/');
+        if (string.Equals(normalizedPath, "/v1/chat/completions", StringComparison.OrdinalIgnoreCase))
+        {
+            return uri.ToString();
+        }
+
+        if (string.IsNullOrWhiteSpace(normalizedPath) ||
+            string.Equals(normalizedPath, "/", StringComparison.Ordinal) ||
+            string.Equals(normalizedPath, "/v1", StringComparison.OrdinalIgnoreCase))
+        {
+            var builder = new UriBuilder(uri)
+            {
+                Path = "/v1/chat/completions",
+                Query = string.Empty,
+            };
+
+            return builder.Uri.ToString();
+        }
+
+        return endpoint;
     }
 
     private static string BuildGeminiGenerateContentEndpoint(string model)

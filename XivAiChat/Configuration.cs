@@ -394,6 +394,7 @@ public static class AiProvider
     public const string LmStudio = "LM Studio";
     public const string OpenAiCompatible = "OpenAI-Compatible";
     public const string Gemini = "Gemini";
+    public const string NvidiaNim = "NVIDIA NIM";
 }
 
 public sealed class PromptPreset

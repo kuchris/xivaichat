@@ -13,6 +13,7 @@ public sealed class ConfigWindow : Window, IDisposable
         AiProvider.LmStudio,
         AiProvider.OpenAiCompatible,
         AiProvider.Gemini,
+        AiProvider.NvidiaNim,
     };
 
     private static readonly string[] ReasoningEffortOptions =
@@ -37,11 +38,7 @@ public sealed class ConfigWindow : Window, IDisposable
         : base("XIV AI Chat###XivAiChatConfig")
     {
         this.plugin = plugin;
-        this.SizeConstraints = new WindowSizeConstraints
-        {
-            MinimumSize = new Vector2(700, 560),
-            MaximumSize = new Vector2(1400, 1400),
-        };
+        WindowCompat.ApplySizeConstraints(this, new Vector2(700, 560), new Vector2(1400, 1400));
 
         this.endpointBuffer = plugin.Configuration.Endpoint;
         this.modelBuffer = plugin.Configuration.Model;
@@ -170,7 +167,7 @@ public sealed class ConfigWindow : Window, IDisposable
                 this.plugin.SaveConfiguration();
             }
 
-            ImGuiComponents.HelpMarker("For Gemini, use the API key from Google AI Studio. Gemini models use the OpenAI-compatible endpoint, while Gemma models on Gemini API are auto-routed to Google's native generateContent endpoint.");
+            ImGuiComponents.HelpMarker(GetApiKeyHelpText(configuration));
         }
         else
         {
@@ -220,6 +217,42 @@ public sealed class ConfigWindow : Window, IDisposable
             }
 
             ImGui.TextWrapped("`gemini-*` models use Google's OpenAI-compatible chat endpoint. `gemma-*` models are auto-routed to Google's native Gemini API path. `gemini-3.1-flash-lite` is sent as `gemini-3.1-flash-lite-preview` for compatibility.");
+        }
+        else if (string.Equals(configuration.Provider, AiProvider.NvidiaNim, StringComparison.Ordinal))
+        {
+            ImGui.Text("Quick model picks");
+            if (ImGui.Button("z-ai/glm4.7"))
+            {
+                configuration.Model = "z-ai/glm4.7";
+                this.modelBuffer = configuration.Model;
+                this.plugin.SaveConfiguration();
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("z-ai/glm5"))
+            {
+                configuration.Model = "z-ai/glm5";
+                this.modelBuffer = configuration.Model;
+                this.plugin.SaveConfiguration();
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("moonshotai/kimi-k2.5"))
+            {
+                configuration.Model = "moonshotai/kimi-k2.5";
+                this.modelBuffer = configuration.Model;
+                this.plugin.SaveConfiguration();
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("minimaxai/minimax-m2.5"))
+            {
+                configuration.Model = "minimaxai/minimax-m2.5";
+                this.modelBuffer = configuration.Model;
+                this.plugin.SaveConfiguration();
+            }
+
+            ImGui.TextWrapped("NIM uses NVIDIA's hosted OpenAI-compatible chat endpoint. You can enter either https://integrate.api.nvidia.com/v1 or the full /v1/chat/completions URL. Model IDs may be entered with or without the nvidia_nim/ routing prefix. z-ai/glm-4.7 is normalized to NVIDIA's chat API id z-ai/glm4.7.");
         }
     }
 
@@ -544,6 +577,7 @@ public sealed class ConfigWindow : Window, IDisposable
         {
             AiProvider.LmStudio => "LM Studio endpoint",
             AiProvider.Gemini => "Gemini endpoint",
+            AiProvider.NvidiaNim => "NVIDIA NIM endpoint",
             _ => "API endpoint",
         };
     }
@@ -562,6 +596,12 @@ public sealed class ConfigWindow : Window, IDisposable
                 configuration.ReasoningEffort = string.IsNullOrWhiteSpace(configuration.ReasoningEffort) ? "low" : configuration.ReasoningEffort;
                 configuration.MaxTokens = Math.Max(configuration.MaxTokens, 4000);
                 break;
+            case AiProvider.NvidiaNim:
+                configuration.Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions";
+                configuration.Model = string.IsNullOrWhiteSpace(configuration.Model)
+                    ? "z-ai/glm4.7"
+                    : configuration.Model;
+                break;
             case AiProvider.OpenAiCompatible:
                 configuration.Endpoint =
                     string.Equals(configuration.Endpoint, "http://127.0.0.1:1234/api/v1/chat", StringComparison.Ordinal) ||
@@ -571,6 +611,16 @@ public sealed class ConfigWindow : Window, IDisposable
                     : configuration.Endpoint;
                 break;
         }
+    }
+
+    private static string GetApiKeyHelpText(Configuration configuration)
+    {
+        return configuration.Provider switch
+        {
+            AiProvider.Gemini => "For Gemini, use the API key from Google AI Studio. Gemini models use the OpenAI-compatible endpoint, while Gemma models on Gemini API are auto-routed to Google's native generateContent endpoint.",
+            AiProvider.NvidiaNim => "For NVIDIA NIM, use your NVIDIA API key. The hosted NIM chat endpoint is OpenAI-compatible; this plugin normalizes the base /v1 URL and strips the nvidia_nim/ model routing prefix.",
+            _ => "Use the API key required by your selected OpenAI-compatible provider.",
+        };
     }
 
     private async Task DetectLmStudioModelAsync()
