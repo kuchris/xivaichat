@@ -3,7 +3,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>XivAiChat</AssemblyName>
     <RootNamespace>XivAiChat</RootNamespace>
-    <Version>0.1.0.0</Version>
+    <Version>0.1.1.0</Version>
     <Description>Dev plugin that reads CWLS chat and uses LM Studio to draft or send replies.</Description>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
